@@ -34,8 +34,8 @@ type Session struct {
 	clientDone chan bool // true: down
 	clientQuit chan bool // true: 退出
 
-	// 回调状态
-	callFunc CallbackFunc
+	callFunc        CallbackFunc
+	eventDispatcher *EventDispatcher
 
 	// BFD session
 	Local      string
@@ -83,15 +83,18 @@ type Session struct {
 	lastEchoRxTime            int64  // 最近一次收到 Echo 回送的时间(纳秒)
 	echoConn                  *net.UDPConn
 	echoQuit                  chan bool // 退出 Echo 循环
+
+	// Multihop 模式相关字段 (RFC 5883)
+	Multihop bool // 是否启用多跳模式
 }
 
 func NewSession(local, remote string, family int, passive bool,
 	rxInterval, txInterval, detectMult int, f CallbackFunc) *Session {
-	return NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, false, 0, f)
+	return NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, false, 0, false, nil, f)
 }
 
 func NewSessionWithOptions(local, remote string, family int, passive bool,
-	rxInterval, txInterval, detectMult int, demand bool, echoInterval int, f CallbackFunc) *Session {
+	rxInterval, txInterval, detectMult int, demand bool, echoInterval int, multihop bool, dispatcher *EventDispatcher, f CallbackFunc) *Session {
 
 	if detectMult <= 0 {
 		detectMult = defaultDetectMult
@@ -100,16 +103,17 @@ func NewSessionWithOptions(local, remote string, family int, passive bool,
 	rand.Seed(time.Now().UnixNano())
 
 	tmpSess := &Session{
-		clientDone: make(chan bool),
-		clientQuit: make(chan bool),
-		echoQuit:   make(chan bool, 1), // buffered, 避免 DelSession 阻塞
-		callFunc:   f,
-		Local:      local,
-		Remote:     remote,
-		Family:     family,
-		Passive:    passive,
-		RxInterval: rxInterval,
-		TxInterval: txInterval,
+		clientDone:      make(chan bool),
+		clientQuit:      make(chan bool),
+		echoQuit:        make(chan bool, 1), // buffered, 避免 DelSession 阻塞
+		callFunc:        f,
+		eventDispatcher: dispatcher,
+		Local:           local,
+		Remote:          remote,
+		Family:          family,
+		Passive:         passive,
+		RxInterval:      rxInterval,
+		TxInterval:      txInterval,
 		//
 		State:       layers.BFDStateDown,
 		RemoteState: layers.BFDStateDown,
@@ -129,6 +133,7 @@ func NewSessionWithOptions(local, remote string, family int, passive bool,
 		//
 		asyncTxInterval: DesiredMinTXInterval,
 		PollSequence:    false,
+		Multihop:        multihop,
 	}
 
 	tmpSess.setDesiredMinTxInterval(DesiredMinTXInterval)
@@ -142,9 +147,9 @@ func NewSessionWithOptions(local, remote string, family int, passive bool,
 // NewEchoSession 创建一个启用 Echo 模式的 BFD 会话
 // echoInterval: Echo 报文发送间隔(毫秒), >0 时启用 Echo
 func NewEchoSession(local, remote string, family int, passive bool,
-	rxInterval, txInterval, detectMult, echoInterval int, f CallbackFunc) *Session {
+	rxInterval, txInterval, detectMult, echoInterval int, dispatcher *EventDispatcher, f CallbackFunc) *Session {
 
-	tmpSess := NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, false, echoInterval, f)
+	tmpSess := NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, false, echoInterval, false, dispatcher, f)
 
 	if echoInterval <= 0 {
 		return tmpSess
@@ -164,9 +169,15 @@ func NewEchoSession(local, remote string, family int, passive bool,
 }
 
 func (s *Session) sessionLoop() {
-	slogger.Infof("setting up UDP client for %s:%d", s.Remote, CONTROL_PORT)
+	var port int
+	if s.Multihop {
+		port = MULTIHOP_CONTROL_PORT
+	} else {
+		port = CONTROL_PORT
+	}
+	slogger.Infof("setting up UDP client for %s:%d (multihop=%v)", s.Remote, port, s.Multihop)
 
-	conn, err := NewClient(s.Local, s.Remote, s.Family)
+	conn, err := NewClientWithPort(s.Local, s.Remote, s.Family, port, s.Multihop)
 	if err != nil {
 		logger.Error("loop new client close client chan")
 		s.clientDone <- true
@@ -266,8 +277,7 @@ func (s *Session) RxPacket(p *layers.BFD) {
 	if p.State == layers.BFDStateAdminDown {
 		if s.State != layers.BFDStateDown {
 			s.LocalDiag = layers.BFDDiagnosticNeighborSignalDown
-			// 状态变化,执行回调函数
-			go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateDown))
+			s.fireStateChange(layers.BFDStateDown)
 
 			s.State = layers.BFDStateDown
 			s.desiredMinTxInterval = DesiredMinTXInterval
@@ -277,15 +287,13 @@ func (s *Session) RxPacket(p *layers.BFD) {
 	} else {
 		if s.State == layers.BFDStateDown {
 			if p.State == layers.BFDStateDown {
-				// 状态变化,执行回调函数
-				go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateInit))
+				s.fireStateChange(layers.BFDStateInit)
 
 				s.State = layers.BFDStateInit
 				slogger.Errorf("BFD session with %s going to INIT state", s.Remote)
 
 			} else if p.State == layers.BFDStateInit {
-				// 状态变化,执行回调函数
-				go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateUp))
+				s.fireStateChange(layers.BFDStateUp)
 
 				s.State = layers.BFDStateUp
 				s.setDesiredMinTxInterval(uint32(s.TxInterval))
@@ -293,8 +301,7 @@ func (s *Session) RxPacket(p *layers.BFD) {
 			}
 		} else if s.State == layers.BFDStateInit {
 			if p.State == layers.BFDStateInit || p.State == layers.BFDStateUp {
-				// 状态变化,执行回调函数
-				go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateUp))
+				s.fireStateChange(layers.BFDStateUp)
 
 				s.State = layers.BFDStateUp
 				s.setDesiredMinTxInterval(uint32(s.TxInterval))
@@ -303,8 +310,7 @@ func (s *Session) RxPacket(p *layers.BFD) {
 		} else {
 			if p.State == layers.BFDStateDown {
 				s.LocalDiag = layers.BFDDiagnosticNeighborSignalDown
-				// 状态变化,执行回调函数
-				go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateDown))
+				s.fireStateChange(layers.BFDStateDown)
 
 				s.State = layers.BFDStateDown
 				slogger.Errorf("BFD remote %s signaled going DOWN", s.Remote)
@@ -528,7 +534,7 @@ func (s *Session) DetectFailure() {
 			if (s.State == layers.BFDStateInit || s.State == layers.BFDStateUp) &&
 				((time.Now().UnixNano()/1e6 - s.LastRxPacketTime) > (int64(s.asyncDetectTime) / 1000)) {
 
-				go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateDown))
+				s.fireStateChange(layers.BFDStateDown)
 
 				s.State = layers.BFDStateDown
 				s.LocalDiag = layers.BFDDiagnosticTimeExpired
@@ -547,13 +553,37 @@ func (s *Session) DetectFailure() {
 	}
 }
 
+func (s *Session) fireStateChange(newState layers.BFDState) {
+	if s.callFunc != nil {
+		go s.callFunc(s.Remote, int(s.State), int(newState))
+	}
+	if s.eventDispatcher != nil {
+		event := BuildBfdEvent(s, s.State, newState)
+		s.eventDispatcher.Dispatch(event)
+	}
+}
+
 // NewDemandSession 创建一个启用 Demand 模式的 BFD 会话
 // Demand 模式(RFC 5880 Section 6.5): 会话建立后, 对端可停止周期性发送 Control 报文,
 // 仅在需要验证连通性时才触发 Poll/Final 交互, 从而降低开销
 func NewDemandSession(local, remote string, family int, passive bool,
-	rxInterval, txInterval, detectMult int, f CallbackFunc) *Session {
+	rxInterval, txInterval, detectMult int, dispatcher *EventDispatcher, f CallbackFunc) *Session {
 
-	return NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, true, 0, f)
+	return NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, true, 0, false, dispatcher, f)
+}
+
+//////////////////////////////// Multihop 模式 (RFC 5883) ////////////////////////////////
+//
+// Multihop 模式允许检测非直连的多跳路径, 使用 UDP 端口 4784, 且要求发送方设置 TTL=255,
+// 接收方验证 TTL=255。注意: Echo 模式与 Multihop 模式互斥(Echo 仅适用于单跳)。
+//
+
+// NewMultihopSession 创建一个启用 Multihop 模式的 BFD 会话 (RFC 5883)
+// Multihop 模式用于检测非直连的多跳路径, 使用 UDP 端口 4784, 发送方设置 TTL=255
+func NewMultihopSession(local, remote string, family int, passive bool,
+	rxInterval, txInterval, detectMult int, dispatcher *EventDispatcher, f CallbackFunc) *Session {
+
+	return NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, false, 0, true, dispatcher, f)
 }
 
 //////////////////////////////// Echo 模式 (RFC 5880 Section 6.4) ////////////////////////////////
@@ -605,8 +635,7 @@ func (s *Session) echoLoop() {
 				slogger.Errorf("BFD Echo timeout for %s, declaring DOWN (elapsed=%d us, detect=%d us)",
 					s.Remote, elapsedUs, s.echoDetectTime)
 
-				// 状态变化, 执行回调函数
-				go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateDown))
+				s.fireStateChange(layers.BFDStateDown)
 
 				s.State = layers.BFDStateDown
 				s.LocalDiag = layers.BFDDiagnosticTimeExpired

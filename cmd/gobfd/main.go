@@ -7,7 +7,11 @@
 //	go run ./cmd/gobfd -local 0.0.0.0 -remote 192.168.1.244 -rx 400 -tx 400 -mult 1
 //	go run ./cmd/gobfd -remote 192.168.1.244 -remote 192.168.1.185
 //	go run ./cmd/gobfd -remote 192.168.1.244 -echo 100   # 启用 Echo 模式
-//	go run ./cmd/gobfd -remote 192.168.1.244 -demand     # 启用 Demand 模式
+//
+// go run ./cmd/gobfd -remote 192.168.1.244 -demand     # 启用 Demand 模式
+//
+//	go run ./cmd/gobfd -remote 192.168.1.244 -multihop   # 启用 Multihop 模式
+//	go run ./cmd/gobfd -remote 192.168.1.244 -event      # 启用事件通知演示模式(展示与上层协议联动)
 //
 // 参数:
 //
@@ -20,6 +24,8 @@
 //	-mult     报文最大失效个数, 默认 1
 //	-echo     Echo 报文发送间隔(毫秒), >0 启用 RFC 5880 Echo 模式, 默认 0(关闭)
 //	-demand   是否启用 RFC 5880 Demand 模式(低开销), 默认 false
+//	-multihop 是否启用 RFC 5883 Multihop 模式(多跳检测), 默认 false
+//	-event    是否启用事件通知演示模式(展示与上层协议联动), 默认 false
 //	-duration 运行时长(秒), <=0 表示一直运行, 默认 0
 package main
 
@@ -79,10 +85,12 @@ func main() {
 	mult := flag.Int("mult", 1, "报文最大失效个数")
 	echo := flag.Int("echo", 0, "Echo 报文发送间隔(毫秒), >0 启用 RFC 5880 Echo 模式")
 	demand := flag.Bool("demand", false, "是否启用 RFC 5880 Demand 模式(低开销)")
+	multihop := flag.Bool("multihop", false, "是否启用 RFC 5883 Multihop 模式(多跳检测)")
 	duration := flag.Int("duration", 0, "运行时长(秒), <=0 表示一直运行")
 
 	var remotes stringSliceFlag
 	flag.Var(&remotes, "remote", "对端ip, 可多次指定")
+	eventDemo := flag.Bool("event", false, "启用事件通知演示模式(展示与上层协议联动)")
 	flag.Parse()
 
 	if len(remotes) == 0 {
@@ -105,12 +113,33 @@ func main() {
 	// 创建并启动 BFD 控制实例 (内部已启动后台收发 goroutine)
 	control := gobfd.NewControl(*local, fam)
 
+	// 事件通知演示模式
+	if *eventDemo {
+		fmt.Println("[EVENT] Demo mode enabled: subscribing to BFD events...")
+
+		// 方式一: 接口方式订阅
+		ospfSim := &ospfSimulator{}
+		control.Subscribe(ospfSim)
+		fmt.Println("[EVENT] Subscribed via EventListener interface (simulating OSPF)")
+
+		// 方式二: 通道方式订阅
+		eventChan := control.SubscribeChan(10)
+		fmt.Println("[EVENT] Subscribed via EventChan (simulating BGP)")
+
+		// 启动通道事件处理协程
+		go bgpEventHandler(eventChan)
+	}
+
 	// 添加监测会话
 	for _, remote := range remotes {
 		if *echo > 0 {
 			control.AddEchoSession(remote, *passive, *rx, *tx, *mult, *echo, callBackBFDState)
 			fmt.Printf("[BFD] added echo session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d echo=%dms passive=%v)\n",
 				*local, remote, *rx, *tx, *mult, *echo, *passive)
+		} else if *multihop {
+			control.AddMultihopSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
+			fmt.Printf("[BFD] added multihop session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
+				*local, remote, *rx, *tx, *mult, *passive)
 		} else if *demand {
 			control.AddDemandSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
 			fmt.Printf("[BFD] added demand session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
@@ -144,4 +173,32 @@ func main() {
 		_ = control.DelSession(remote)
 	}
 	fmt.Println("[BFD] exited.")
+}
+
+// ospfSimulator 模拟 OSPF 协议作为 EventListener
+// 展示上层协议如何通过接口方式订阅 BFD 事件
+type ospfSimulator struct{}
+
+func (o *ospfSimulator) OnBfdEvent(event gobfd.BfdEvent) {
+	fmt.Printf("[EVENT-OSPF] BFD state change detected: remote=%s, %s -> %s\n",
+		event.Remote, stateName(event.PreState), stateName(event.CurState))
+
+	if event.CurState == gobfd.StateDown {
+		fmt.Printf("[EVENT-OSPF] Triggering OSPF route convergence for %s...\n", event.Remote)
+	} else if event.CurState == gobfd.StateUp {
+		fmt.Printf("[EVENT-OSPF] Restoring primary route for %s\n", event.Remote)
+	}
+}
+
+// bgpEventHandler 模拟 BGP 协议通过通道方式接收 BFD 事件
+func bgpEventHandler(eventChan gobfd.EventChan) {
+	for event := range eventChan {
+		fmt.Printf("[EVENT-BGP] BFD event received: remote=%s, mode=%v, state=%s -> %s\n",
+			event.Remote, event.Mode, stateName(event.PreState), stateName(event.CurState))
+
+		if event.CurState == gobfd.StateDown {
+			fmt.Printf("[EVENT-BGP] Initiating BGP session flap for %s\n", event.Remote)
+		}
+	}
+	fmt.Println("[EVENT-BGP] Event channel closed")
 }

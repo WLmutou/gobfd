@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	CONTROL_PORT = 3784
-	ECHO_PORT    = 3785 // RFC 5880: BFD Echo 报文使用的 UDP 端口
+	CONTROL_PORT          = 3784
+	ECHO_PORT             = 3785 // RFC 5880: BFD Echo 报文使用的 UDP 端口
+	MULTIHOP_CONTROL_PORT = 4784 // RFC 5883: BFD Multihop 使用的 UDP 端口
 )
 
 type RxData struct {
@@ -33,25 +34,41 @@ func RandInt(min, max int) int {
 }
 
 func NewClient(local, remote string, family int) (*net.UDPConn, error) {
+	return NewClientWithPort(local, remote, family, CONTROL_PORT, false)
+}
+
+func NewClientWithPort(local, remote string, family int, port int, multihop bool) (*net.UDPConn, error) {
 	var conn *net.UDPConn
 	var err error
 	var udpAddr *net.UDPAddr
 	var rudpAddr *net.UDPAddr
 	srcPort := RandInt(SourcePortMin, SourcePortMax)
 	addr := fmt.Sprintf("%s:%d", local, srcPort)
-	serAddr := fmt.Sprintf("%s:%d", remote, CONTROL_PORT)
+	serAddr := fmt.Sprintf("%s:%d", remote, port)
 	if family == syscall.AF_INET6 {
-		// ipv6
 		udpAddr, _ = net.ResolveUDPAddr("udp6", addr)
 		rudpAddr, _ = net.ResolveUDPAddr("udp6", serAddr)
 	} else {
-		// ipv4
 		udpAddr, _ = net.ResolveUDPAddr("udp4", addr)
 		rudpAddr, _ = net.ResolveUDPAddr("udp4", serAddr)
 	}
 	conn, err = net.DialUDP("udp", udpAddr, rudpAddr)
 	if err != nil {
 		return conn, err
+	}
+	if multihop {
+		rawConn, err := conn.SyscallConn()
+		if err == nil {
+			if family == syscall.AF_INET6 {
+				_ = rawConn.Control(func(fd uintptr) {
+					_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, syscall.IPV6_UNICAST_HOPS, 255)
+				})
+			} else {
+				_ = rawConn.Control(func(fd uintptr) {
+					_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TTL, 255)
+				})
+			}
+		}
 	}
 	return conn, nil
 }
@@ -60,17 +77,25 @@ func NewClient(local, remote string, family int) (*net.UDPConn, error) {
 
 type Server struct {
 	Addr     string
+	Port     int
 	listener *net.UDPConn // udp conn
 
-	Family  int
-	RxQueue chan *RxData
+	Family   int
+	RxQueue  chan *RxData
+	Multihop bool
 }
 
 func NewServer(addr string, family int, rx chan *RxData) *Server {
+	return NewServerWithPort(addr, family, rx, CONTROL_PORT, false)
+}
+
+func NewServerWithPort(addr string, family int, rx chan *RxData, port int, multihop bool) *Server {
 	return &Server{
-		Addr:    addr,
-		Family:  family,
-		RxQueue: rx,
+		Addr:     addr,
+		Port:     port,
+		Family:   family,
+		RxQueue:  rx,
+		Multihop: multihop,
 	}
 }
 
@@ -78,9 +103,9 @@ func (s *Server) Start() error {
 	logger.Debug(" server run start...")
 
 	var udpAddr *net.UDPAddr
+	addr := fmt.Sprintf("%s:%d", s.Addr, s.Port)
 	if s.Family == syscall.AF_INET6 {
-		// ipv6
-		udpAddr, err := net.ResolveUDPAddr("udp6", s.Addr)
+		udpAddr, err := net.ResolveUDPAddr("udp6", addr)
 		if err != nil {
 			logger.Error("ResolveUDPAddr err: " + err.Error())
 			return err
@@ -91,8 +116,7 @@ func (s *Server) Start() error {
 			return err
 		}
 	} else {
-		// ipv4
-		udpAddr, err := net.ResolveUDPAddr("udp4", s.Addr)
+		udpAddr, err := net.ResolveUDPAddr("udp4", addr)
 		if err != nil {
 			logger.Error("ResolveUDPAddr err: " + err.Error())
 			return err

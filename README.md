@@ -6,9 +6,12 @@ BFD（Bidirectional Forwarding Detection）协议的 Go 语言实现，支持 RF
 
 - **RFC 5880 兼容**：完整实现 BFD 控制报文协议
 - **Echo 模式**：支持 RFC 5880 Section 6.4 的 Echo 辅助检测模式
+- **Demand 模式**：支持 RFC 5880 Section 6.5 的低开销 Demand 模式
+- **Multihop 模式**：支持 RFC 5883 的多跳路径检测
 - **多会话管理**：单个 Control 实例可管理多个 BFD 检测会话
 - **IPv4/IPv6**：支持双协议栈
 - **状态回调**：会话状态变化时触发自定义回调函数
+- **事件通知机制**：为上层协议(OSPF/BGP等)提供会话状态变更事件通知，支持接口方式和通道方式两种订阅模式
 
 ## BFD 帧结构
 
@@ -123,6 +126,70 @@ func main() {
 }
 ```
 
+### 事件通知机制（与上层协议联动）
+
+BFD 的价值在于为 OSPF、BGP 等路由协议提供快速故障通知。gobfd 提供了两种订阅方式：
+
+#### 方式一：接口方式（EventListener）
+
+```go
+// 实现 EventListener 接口
+type MyRouteProtocol struct{}
+
+func (m *MyRouteProtocol) OnBfdEvent(event gobfd.BfdEvent) {
+	fmt.Printf("[OSPF] BFD event: %s -> %s for %s\n", 
+		stateName(event.PreState), stateName(event.CurState), event.Remote)
+	
+	if event.CurState == gobfd.StateDown {
+		// 触发路由收敛，切换到备用路径
+		fmt.Println("Triggering route convergence...")
+	}
+}
+
+func main() {
+	control := gobfd.NewControl("0.0.0.0", syscall.AF_INET)
+	
+	// 订阅事件
+	ospf := &MyRouteProtocol{}
+	control.Subscribe(ospf)
+	
+	// 添加会话
+	control.AddSession("192.168.1.244", false, 400, 400, 1, callBackBFDState)
+	
+	time.Sleep(time.Second * 30)
+	
+	// 取消订阅
+	control.Unsubscribe(ospf)
+}
+```
+
+#### 方式二：通道方式（EventChan）
+
+```go
+func main() {
+	control := gobfd.NewControl("0.0.0.0", syscall.AF_INET)
+	
+	// 通过通道订阅，缓冲区大小为 10
+	eventChan := control.SubscribeChan(10)
+	
+	// 启动事件处理协程
+	go func() {
+		for event := range eventChan {
+			fmt.Printf("[BGP] BFD state change: %s -> %s for %s (mode=%v)\n",
+				stateName(event.PreState), stateName(event.CurState),
+				event.Remote, event.Mode)
+		}
+	}()
+	
+	control.AddSession("192.168.1.244", false, 400, 400, 1, callBackBFDState)
+	
+	time.Sleep(time.Second * 30)
+	
+	// 取消订阅
+	control.UnsubscribeChan(eventChan)
+}
+```
+
 ## API 参考
 
 ### 常量
@@ -135,6 +202,7 @@ func main() {
 | `StateUp` | 3 | Up 状态 |
 | `ControlPort` | 3784 | BFD Control 报文 UDP 端口 |
 | `EchoPort` | 3785 | BFD Echo 报文 UDP 端口 |
+| `MultihopControlPort` | 4784 | BFD Multihop 端口 (RFC 5883) |
 
 ### 类型
 
@@ -145,6 +213,37 @@ type CallbackFunc func(ipAddr string, preState, curState int) error
 // Control BFD 控制实例, 负责管理多个检测会话的收发包与状态机
 // 通过 NewControl 创建, 不应直接构造
 type Control struct{ ... }
+
+// SessionMode BFD 会话模式
+type SessionMode int
+
+const (
+	ModeSessionAsync   // 异步模式
+	ModeSessionDemand  // Demand 模式 (RFC 5880 Section 6.5)
+	ModeSessionEcho    // Echo 模式 (RFC 5880 Section 6.4)
+	ModeSessionMultihop // Multihop 模式 (RFC 5883)
+)
+
+// BfdEvent BFD 会话状态变更事件
+type BfdEvent struct {
+	Remote      string      // 对端 IP 地址
+	Local       string      // 本地 IP 地址
+	Family      int         // 协议家族 (AF_INET / AF_INET6)
+	Mode        SessionMode // 会话模式
+	PreState    int         // 变化前状态 (StateXXX 常量)
+	CurState    int         // 变化后状态 (StateXXX 常量)
+	Timestamp   time.Time   // 事件发生时间
+	Discr       uint32      // 本地 Discriminator
+	RemoteDiscr uint32      // 对端 Discriminator
+}
+
+// EventListener BFD 事件监听器接口
+type EventListener interface {
+	OnBfdEvent(event BfdEvent)
+}
+
+// EventChan 基于通道的事件订阅类型
+type EventChan <-chan BfdEvent
 ```
 
 ### 方法
@@ -160,8 +259,26 @@ func (c *Control) AddSession(remote string, passive bool, rxInterval, txInterval
 // echoInterval: Echo 报文发送间隔(毫秒), >0 启用 Echo
 func (c *Control) AddEchoSession(remote string, passive bool, rxInterval, txInterval, detectMult, echoInterval int, f CallbackFunc)
 
+// AddDemandSession 添加 Demand 模式会话 (RFC 5880 Section 6.5)
+func (c *Control) AddDemandSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc)
+
+// AddMultihopSession 添加 Multihop 模式会话 (RFC 5883)
+func (c *Control) AddMultihopSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc)
+
 // DelSession 删除会话
 func (c *Control) DelSession(remote string) error
+
+// Subscribe 通过接口方式订阅 BFD 事件
+func (c *Control) Subscribe(listener EventListener)
+
+// SubscribeChan 通过通道方式订阅 BFD 事件
+func (c *Control) SubscribeChan(bufSize int) EventChan
+
+// Unsubscribe 取消接口方式订阅
+func (c *Control) Unsubscribe(listener EventListener)
+
+// UnsubscribeChan 取消通道方式订阅
+func (c *Control) UnsubscribeChan(ch EventChan)
 ```
 
 ## Echo 模式工作原理
@@ -218,6 +335,8 @@ go run ./cmd/gobfd -remote 192.168.1.244 -duration 30
 | `-tx` | 发送间隔(毫秒) | 400 |
 | `-mult` | 报文最大失效个数 | 1 |
 | `-echo` | Echo 发送间隔(毫秒)，>0 启用 | 0 |
+| `-demand` | 是否启用 Demand 模式 | false |
+| `-multihop` | 是否启用 Multihop 模式 | false |
 | `-duration` | 运行时长(秒)，<=0 一直运行 | 0 |
 
 ## 测试
@@ -248,6 +367,7 @@ gobfd/
 └── internal/           # 内部实现
     ├── control.go      # 控制层
     ├── control_test.go
+    ├── event.go        # 事件通知系统(与上层协议联动)
     ├── log.go          # 日志
     ├── packet.go       # 报文编解码
     ├── packet_test.go

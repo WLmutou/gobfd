@@ -11,18 +11,19 @@ import (
 type CallbackFunc func(ipAddr string, preState, curState int) error
 
 type Control struct {
-	Local    string
-	Family   int // 协议家族: ipv4, ipv6,
-	RxQueue  chan *RxData
-	sessions []*Session
+	Local           string
+	Family          int // 协议家族: ipv4, ipv6,
+	RxQueue         chan *RxData
+	sessions        []*Session
+	eventDispatcher *EventDispatcher
 }
 
 func NewControl(local string, family int) *Control {
 	tmpControl := &Control{
-		Local:  local,
-		Family: family,
-
-		RxQueue: make(chan *RxData, 0),
+		Local:           local,
+		Family:          family,
+		RxQueue:         make(chan *RxData, 0),
+		eventDispatcher: NewEventDispatcher(),
 	}
 	tmpControl.Run()
 	return tmpControl
@@ -40,7 +41,7 @@ func NewControl(local string, family int) *Control {
  * f: 回调函数
  */
 func (c *Control) AddSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc) {
-	nsession := NewSession(
+	nsession := NewSessionWithOptions(
 		c.Local,
 		remote,
 		c.Family,
@@ -48,6 +49,10 @@ func (c *Control) AddSession(remote string, passive bool, rxInterval, txInterval
 		rxInterval*1000,
 		txInterval*1000,
 		detectMult,
+		false,
+		0,
+		false,
+		c.eventDispatcher,
 		f,
 	)
 	slogger.Debugf("Creating BFD session for remote %s.", remote)
@@ -74,6 +79,7 @@ func (c *Control) AddEchoSession(remote string, passive bool, rxInterval, txInte
 		txInterval*1000,
 		detectMult,
 		echoInterval,
+		c.eventDispatcher,
 		f,
 	)
 	slogger.Debugf("Creating BFD Echo session for remote %s (echoInterval=%dms).", remote, echoInterval)
@@ -98,10 +104,48 @@ func (c *Control) AddDemandSession(remote string, passive bool, rxInterval, txIn
 		rxInterval*1000,
 		txInterval*1000,
 		detectMult,
+		c.eventDispatcher,
 		f,
 	)
 	slogger.Debugf("Creating BFD Demand session for remote %s.", remote)
 	c.sessions = append(c.sessions, nsession)
+}
+
+// //// 添加需要检测的实例 (启用 Multihop 模式) ///////
+// Multihop 模式(RFC 5883): 使用 UDP 端口 4784, 发送方设置 TTL=255,
+// 用于检测非直连的多跳路径
+func (c *Control) AddMultihopSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc) {
+	nsession := NewMultihopSession(
+		c.Local,
+		remote,
+		c.Family,
+		passive,
+		rxInterval*1000,
+		txInterval*1000,
+		detectMult,
+		c.eventDispatcher,
+		f,
+	)
+	slogger.Debugf("Creating BFD Multihop session for remote %s.", remote)
+	c.sessions = append(c.sessions, nsession)
+}
+
+////// 事件订阅接口 ///////
+
+func (c *Control) Subscribe(listener EventListener) {
+	c.eventDispatcher.Subscribe(listener)
+}
+
+func (c *Control) SubscribeChan(bufSize int) EventChan {
+	return c.eventDispatcher.SubscribeChan(bufSize)
+}
+
+func (c *Control) Unsubscribe(listener EventListener) {
+	c.eventDispatcher.Unsubscribe(listener)
+}
+
+func (c *Control) UnsubscribeChan(ch EventChan) {
+	c.eventDispatcher.UnsubscribeChan(ch)
 }
 
 // //// 删除某个需要检测的实例  /////
@@ -157,6 +201,11 @@ func (c *Control) initServer() {
 	addr := fmt.Sprintf("%s:%d", c.Local, CONTROL_PORT)
 	s := NewServer(addr, c.Family, c.RxQueue)
 	go s.Start()
+
+	slogger.Debugf("Setting up multihop udp server on %s:%d", c.Local, MULTIHOP_CONTROL_PORT)
+	multihopAddr := fmt.Sprintf("%s:%d", c.Local, MULTIHOP_CONTROL_PORT)
+	multihopS := NewServerWithPort(multihopAddr, c.Family, c.RxQueue, MULTIHOP_CONTROL_PORT, true)
+	go multihopS.Start()
 
 	// 启动 Echo 反射服务器, 用于回送对端发来的 Echo 报文 (RFC 5880)
 	echoAddr := fmt.Sprintf("%s:%d", c.Local, ECHO_PORT)
