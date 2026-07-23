@@ -6,7 +6,7 @@ import (
 	"syscall"
 
 	"github.com/WLmutou/gobfd"
-	"github.com/osrg/gobgp/v3/api"
+	api "github.com/osrg/gobgp/v3/api"
 	"google.golang.org/grpc"
 )
 
