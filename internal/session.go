@@ -58,8 +58,10 @@ type Session struct {
 
 	DemandMode       bool // 异步模式和demand模式, 异步互相发送, demand模式只有在需要的时候才发送BFD control packet
 	RemoteDemandMode bool
-	DetectMult       uint8 //报文最大失效的个数, layers.BFDDetectMultiplier,
-	AuthType         bool
+	DetectMult       uint8              //报文最大失效的个数, layers.BFDDetectMultiplier,
+	AuthType         layers.BFDAuthType // 认证类型 (None/Password/KeyedMD5/KeyedSHA1等)
+	AuthKeyID        uint8              // 认证密钥ID
+	AuthKey          string             // 认证密钥
 	RcvAuthSeq       int
 	XmitAuthSeq      int64
 	AuthSeqKnown     bool
@@ -96,6 +98,13 @@ func NewSession(local, remote string, family int, passive bool,
 func NewSessionWithOptions(local, remote string, family int, passive bool,
 	rxInterval, txInterval, detectMult int, demand bool, echoInterval int, multihop bool, dispatcher *EventDispatcher, f CallbackFunc) *Session {
 
+	return NewSessionWithAuth(local, remote, family, passive, rxInterval, txInterval, detectMult, demand, echoInterval, multihop, dispatcher, f, layers.BFDAuthTypeNone, 0, "")
+}
+
+func NewSessionWithAuth(local, remote string, family int, passive bool,
+	rxInterval, txInterval, detectMult int, demand bool, echoInterval int, multihop bool, dispatcher *EventDispatcher, f CallbackFunc,
+	authType layers.BFDAuthType, authKeyID uint8, authKey string) *Session {
+
 	if detectMult <= 0 {
 		detectMult = defaultDetectMult
 	}
@@ -126,7 +135,9 @@ func NewSessionWithOptions(local, remote string, family int, passive bool,
 		DemandMode:          demand,
 		RemoteDemandMode:    false,
 		DetectMult:          uint8(detectMult), //layers.BFDDetectMultiplier(detectMult),
-		AuthType:            true,              //  是否需要认证
+		AuthType:            authType,
+		AuthKeyID:           authKeyID,
+		AuthKey:             authKey,
 		RcvAuthSeq:          0,
 		XmitAuthSeq:         rand.Int63n(4294967295), // 32-bit
 		AuthSeqKnown:        false,
@@ -150,6 +161,29 @@ func NewEchoSession(local, remote string, family int, passive bool,
 	rxInterval, txInterval, detectMult, echoInterval int, dispatcher *EventDispatcher, f CallbackFunc) *Session {
 
 	tmpSess := NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, false, echoInterval, false, dispatcher, f)
+
+	if echoInterval <= 0 {
+		return tmpSess
+	}
+
+	tmpSess.EchoEnabled = true
+	tmpSess.echoInterval = uint32(echoInterval * 1000)                 // 转为微秒
+	tmpSess.echoDetectTime = uint32(detectMult) * tmpSess.echoInterval // detectMult * echoInterval
+	// 通告对端本端支持的最小 Echo 接收间隔
+	tmpSess.requiredMinEchoRxInterval = tmpSess.echoInterval
+	// 初始化为当前时间, 避免一启动就误判超时
+	tmpSess.lastEchoRxTime = time.Now().UnixNano()
+
+	go tmpSess.echoLoop()
+
+	return tmpSess
+}
+
+func NewEchoSessionWithAuth(local, remote string, family int, passive bool,
+	rxInterval, txInterval, detectMult, echoInterval int, dispatcher *EventDispatcher, f CallbackFunc,
+	authType layers.BFDAuthType, authKeyID uint8, authKey string) *Session {
+
+	tmpSess := NewSessionWithAuth(local, remote, family, passive, rxInterval, txInterval, detectMult, false, echoInterval, false, dispatcher, f, authType, authKeyID, authKey)
 
 	if echoInterval <= 0 {
 		return tmpSess
@@ -238,18 +272,20 @@ func (s *Session) sessionLoop() {
 // 处理received接收到的包
 func (s *Session) RxPacket(p *layers.BFD) {
 	//fmt.Println("====================== session rx packet ===================")
-	if p.AuthPresent && !s.AuthType {
+	if p.AuthPresent && s.AuthType == layers.BFDAuthTypeNone {
 		logger.Error("Received packet with authentication while no authentication is configured locally")
 		return
 	}
 
-	if !p.AuthPresent && s.AuthType {
+	if !p.AuthPresent && s.AuthType != layers.BFDAuthTypeNone {
 		logger.Error("Received packet without authentication while authentication is configured locally")
 		return
 	}
-	if p.AuthPresent != s.AuthType {
-		logger.Error("Authenticated packet received, not supported!")
-		return
+	if p.AuthPresent && s.AuthType != layers.BFDAuthTypeNone {
+		if !ValidateAuth(p, s.AuthType, s.AuthKeyID, []byte(s.AuthKey)) {
+			logger.Error("Authentication validation failed!")
+			return
+		}
 	}
 
 	// 设置远程的bfd.RemoteDiscr 为 My Discriminator.
@@ -385,10 +421,9 @@ func (s *Session) TxPacket(final bool) {
 	}
 
 	var tmpAuth *layers.BFDAuthHeader
-	if s.AuthType {
-		tmpAuth = auth
-	} else {
-		tmpAuth = nil
+	if s.AuthType != layers.BFDAuthTypeNone {
+		s.XmitAuthSeq++
+		tmpAuth = BuildAuthHeader(s.AuthType, s.AuthKeyID, uint32(s.XmitAuthSeq), []byte(s.AuthKey))
 	}
 
 	txByte := EncodePacket(VERSION,
@@ -397,7 +432,7 @@ func (s *Session) TxPacket(final bool) {
 		poll,
 		final,
 		ControlPlaneIndependent,
-		s.AuthType,
+		s.AuthType != layers.BFDAuthTypeNone,
 		demand,
 		MULTIPOINT,
 		layers.BFDDetectMultiplier(s.DetectMult),
@@ -572,6 +607,13 @@ func NewDemandSession(local, remote string, family int, passive bool,
 	return NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, true, 0, false, dispatcher, f)
 }
 
+func NewDemandSessionWithAuth(local, remote string, family int, passive bool,
+	rxInterval, txInterval, detectMult int, dispatcher *EventDispatcher, f CallbackFunc,
+	authType layers.BFDAuthType, authKeyID uint8, authKey string) *Session {
+
+	return NewSessionWithAuth(local, remote, family, passive, rxInterval, txInterval, detectMult, true, 0, false, dispatcher, f, authType, authKeyID, authKey)
+}
+
 //////////////////////////////// Multihop 模式 (RFC 5883) ////////////////////////////////
 //
 // Multihop 模式允许检测非直连的多跳路径, 使用 UDP 端口 4784, 且要求发送方设置 TTL=255,
@@ -584,6 +626,13 @@ func NewMultihopSession(local, remote string, family int, passive bool,
 	rxInterval, txInterval, detectMult int, dispatcher *EventDispatcher, f CallbackFunc) *Session {
 
 	return NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, false, 0, true, dispatcher, f)
+}
+
+func NewMultihopSessionWithAuth(local, remote string, family int, passive bool,
+	rxInterval, txInterval, detectMult int, dispatcher *EventDispatcher, f CallbackFunc,
+	authType layers.BFDAuthType, authKeyID uint8, authKey string) *Session {
+
+	return NewSessionWithAuth(local, remote, family, passive, rxInterval, txInterval, detectMult, false, 0, true, dispatcher, f, authType, authKeyID, authKey)
 }
 
 //////////////////////////////// Echo 模式 (RFC 5880 Section 6.4) ////////////////////////////////

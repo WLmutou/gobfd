@@ -10,23 +10,28 @@
 //
 // go run ./cmd/gobfd -remote 192.168.1.244 -demand     # 启用 Demand 模式
 //
-//	go run ./cmd/gobfd -remote 192.168.1.244 -multihop   # 启用 Multihop 模式
+// go run ./cmd/gobfd -remote 192.168.1.244 -multihop   # 启用 Multihop 模式
+//
 //	go run ./cmd/gobfd -remote 192.168.1.244 -event      # 启用事件通知演示模式(展示与上层协议联动)
+//	go run ./cmd/gobfd -remote 192.168.1.244 -auth-type 2 -auth-key mysecretkey -auth-keyid 1  # 启用 Keyed MD5 认证
 //
 // 参数:
 //
-//	-local    本地绑定ip, 默认 0.0.0.0
-//	-family   协议家族, 4=ipv4(默认), 6=ipv6
-//	-remote   对端ip, 可多次指定以同时检测多个目标
-//	-passive  是否被动模式, 默认 false
-//	-rx       接收间隔(毫秒), 默认 400
-//	-tx       发送间隔(毫秒), 默认 400
-//	-mult     报文最大失效个数, 默认 1
-//	-echo     Echo 报文发送间隔(毫秒), >0 启用 RFC 5880 Echo 模式, 默认 0(关闭)
-//	-demand   是否启用 RFC 5880 Demand 模式(低开销), 默认 false
-//	-multihop 是否启用 RFC 5883 Multihop 模式(多跳检测), 默认 false
-//	-event    是否启用事件通知演示模式(展示与上层协议联动), 默认 false
-//	-duration 运行时长(秒), <=0 表示一直运行, 默认 0
+//	-local     本地绑定ip, 默认 0.0.0.0
+//	-family    协议家族, 4=ipv4(默认), 6=ipv6
+//	-remote    对端ip, 可多次指定以同时检测多个目标
+//	-passive   是否被动模式, 默认 false
+//	-rx        接收间隔(毫秒), 默认 400
+//	-tx        发送间隔(毫秒), 默认 400
+//	-mult      报文最大失效个数, 默认 1
+//	-echo      Echo 报文发送间隔(毫秒), >0 启用 RFC 5880 Echo 模式, 默认 0(关闭)
+//	-demand    是否启用 RFC 5880 Demand 模式(低开销), 默认 false
+//	-multihop  是否启用 RFC 5883 Multihop 模式(多跳检测), 默认 false
+//	-event     是否启用事件通知演示模式(展示与上层协议联动), 默认 false
+//	-duration  运行时长(秒), <=0 表示一直运行, 默认 0
+//	-auth-type 认证类型(RFC 5880): 0=None(默认), 1=Password, 2=KeyedMD5, 3=MeticulousKeyedMD5, 4=KeyedSHA1, 5=MeticulousKeyedSHA1
+//	-auth-key  认证密钥字符串
+//	-auth-keyid 认证密钥ID(1-255), 默认 1
 package main
 
 import (
@@ -87,6 +92,9 @@ func main() {
 	demand := flag.Bool("demand", false, "是否启用 RFC 5880 Demand 模式(低开销)")
 	multihop := flag.Bool("multihop", false, "是否启用 RFC 5883 Multihop 模式(多跳检测)")
 	duration := flag.Int("duration", 0, "运行时长(秒), <=0 表示一直运行")
+	authType := flag.Int("auth-type", 0, "认证类型(RFC 5880): 0=None, 1=Password, 2=KeyedMD5, 3=MeticulousKeyedMD5, 4=KeyedSHA1, 5=MeticulousKeyedSHA1")
+	authKey := flag.String("auth-key", "", "认证密钥字符串")
+	authKeyID := flag.Uint("auth-keyid", 1, "认证密钥ID(1-255)")
 
 	var remotes stringSliceFlag
 	flag.Var(&remotes, "remote", "对端ip, 可多次指定")
@@ -132,22 +140,47 @@ func main() {
 
 	// 添加监测会话
 	for _, remote := range remotes {
+		useAuth := *authType != 0
 		if *echo > 0 {
-			control.AddEchoSession(remote, *passive, *rx, *tx, *mult, *echo, callBackBFDState)
-			fmt.Printf("[BFD] added echo session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d echo=%dms passive=%v)\n",
-				*local, remote, *rx, *tx, *mult, *echo, *passive)
+			if useAuth {
+				control.AddEchoSessionWithAuth(remote, *passive, *rx, *tx, *mult, *echo, gobfd.AuthType(*authType), uint8(*authKeyID), *authKey, callBackBFDState)
+				fmt.Printf("[BFD] added echo session with auth: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d echo=%dms passive=%v authType=%d keyID=%d)\n",
+					*local, remote, *rx, *tx, *mult, *echo, *passive, *authType, *authKeyID)
+			} else {
+				control.AddEchoSession(remote, *passive, *rx, *tx, *mult, *echo, callBackBFDState)
+				fmt.Printf("[BFD] added echo session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d echo=%dms passive=%v)\n",
+					*local, remote, *rx, *tx, *mult, *echo, *passive)
+			}
 		} else if *multihop {
-			control.AddMultihopSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
-			fmt.Printf("[BFD] added multihop session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
-				*local, remote, *rx, *tx, *mult, *passive)
+			if useAuth {
+				control.AddMultihopSessionWithAuth(remote, *passive, *rx, *tx, *mult, gobfd.AuthType(*authType), uint8(*authKeyID), *authKey, callBackBFDState)
+				fmt.Printf("[BFD] added multihop session with auth: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v authType=%d keyID=%d)\n",
+					*local, remote, *rx, *tx, *mult, *passive, *authType, *authKeyID)
+			} else {
+				control.AddMultihopSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
+				fmt.Printf("[BFD] added multihop session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
+					*local, remote, *rx, *tx, *mult, *passive)
+			}
 		} else if *demand {
-			control.AddDemandSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
-			fmt.Printf("[BFD] added demand session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
-				*local, remote, *rx, *tx, *mult, *passive)
+			if useAuth {
+				control.AddDemandSessionWithAuth(remote, *passive, *rx, *tx, *mult, gobfd.AuthType(*authType), uint8(*authKeyID), *authKey, callBackBFDState)
+				fmt.Printf("[BFD] added demand session with auth: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v authType=%d keyID=%d)\n",
+					*local, remote, *rx, *tx, *mult, *passive, *authType, *authKeyID)
+			} else {
+				control.AddDemandSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
+				fmt.Printf("[BFD] added demand session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
+					*local, remote, *rx, *tx, *mult, *passive)
+			}
 		} else {
-			control.AddSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
-			fmt.Printf("[BFD] added session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
-				*local, remote, *rx, *tx, *mult, *passive)
+			if useAuth {
+				control.AddSessionWithAuth(remote, *passive, *rx, *tx, *mult, gobfd.AuthType(*authType), uint8(*authKeyID), *authKey, callBackBFDState)
+				fmt.Printf("[BFD] added session with auth: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v authType=%d keyID=%d)\n",
+					*local, remote, *rx, *tx, *mult, *passive, *authType, *authKeyID)
+			} else {
+				control.AddSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
+				fmt.Printf("[BFD] added session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
+					*local, remote, *rx, *tx, *mult, *passive)
+			}
 		}
 	}
 

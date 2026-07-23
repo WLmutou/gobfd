@@ -2,6 +2,7 @@ package gobfd
 
 import (
 	internalbfd "github.com/WLmutou/gobfd/internal"
+	"github.com/google/gopacket/layers"
 )
 
 // BFD 会话状态常量 (RFC 5880)
@@ -31,11 +32,25 @@ const (
 type SessionMode = internalbfd.SessionMode
 
 const (
-	ModeSessionAsync   SessionMode = iota // 异步模式
-	ModeSessionDemand                     // Demand 模式 (RFC 5880 Section 6.5)
-	ModeSessionEcho                       // Echo 模式 (RFC 5880 Section 6.4)
-	ModeSessionMultihop                   // Multihop 模式 (RFC 5883)
+	ModeSessionAsync    SessionMode = iota // 异步模式
+	ModeSessionDemand                      // Demand 模式 (RFC 5880 Section 6.5)
+	ModeSessionEcho                        // Echo 模式 (RFC 5880 Section 6.4)
+	ModeSessionMultihop                    // Multihop 模式 (RFC 5883)
 )
+
+// BFD 认证类型常量 (RFC 5880)
+// 用于在创建会话时指定认证方式
+const (
+	AuthTypeNone                = layers.BFDAuthTypeNone                // 无认证
+	AuthTypePassword            = layers.BFDAuthTypePassword            // 简单密码认证
+	AuthTypeKeyedMD5            = layers.BFDAuthTypeKeyedMD5            // Keyed MD5 认证
+	AuthTypeMeticulousKeyedMD5  = layers.BFDAuthTypeMeticulousKeyedMD5  // Meticulous Keyed MD5 认证
+	AuthTypeKeyedSHA1           = layers.BFDAuthTypeKeyedSHA1           // Keyed SHA1 认证
+	AuthTypeMeticulousKeyedSHA1 = layers.BFDAuthTypeMeticulousKeyedSHA1 // Meticulous Keyed SHA1 认证
+)
+
+// AuthType BFD 认证类型
+type AuthType = layers.BFDAuthType
 
 // BfdEvent BFD 会话状态变更事件
 // 用于向上层协议(OSPF/BGP等)通知 BFD 会话状态变化
@@ -57,6 +72,14 @@ type CallbackFunc = internalbfd.CallbackFunc
 
 // Control BFD 控制实例, 负责管理多个检测会话的收发包与状态机
 type Control = internalbfd.Control
+
+// AuthConfig BFD 认证配置
+// 用于在创建会话时配置认证参数
+type AuthConfig struct {
+	AuthType AuthType // 认证类型 (AuthTypeKeyedMD5, AuthTypeKeyedSHA1等)
+	KeyID    uint8    // 密钥ID (1-255)
+	Key      string   // 密钥字符串
+}
 
 // NewControl 创建并启动一个 BFD 控制实例
 // local:  本地绑定ip (如 "0.0.0.0")

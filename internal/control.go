@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/gopacket/layers"
 	"go.uber.org/zap"
 )
 
@@ -59,6 +60,29 @@ func (c *Control) AddSession(remote string, passive bool, rxInterval, txInterval
 	c.sessions = append(c.sessions, nsession)
 }
 
+func (c *Control) AddSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult int,
+	authType layers.BFDAuthType, authKeyID uint8, authKey string, f CallbackFunc) {
+	nsession := NewSessionWithAuth(
+		c.Local,
+		remote,
+		c.Family,
+		passive,
+		rxInterval*1000,
+		txInterval*1000,
+		detectMult,
+		false,
+		0,
+		false,
+		c.eventDispatcher,
+		f,
+		authType,
+		authKeyID,
+		authKey,
+	)
+	slogger.Debugf("Creating BFD session with auth for remote %s (authType=%v).", remote, authType)
+	c.sessions = append(c.sessions, nsession)
+}
+
 ////// 添加需要检测的实例 (启用 Echo 模式) ///////
 /*
  * remote: 对端ip
@@ -83,6 +107,27 @@ func (c *Control) AddEchoSession(remote string, passive bool, rxInterval, txInte
 		f,
 	)
 	slogger.Debugf("Creating BFD Echo session for remote %s (echoInterval=%dms).", remote, echoInterval)
+	c.sessions = append(c.sessions, nsession)
+}
+
+func (c *Control) AddEchoSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult, echoInterval int,
+	authType layers.BFDAuthType, authKeyID uint8, authKey string, f CallbackFunc) {
+	nsession := NewEchoSessionWithAuth(
+		c.Local,
+		remote,
+		c.Family,
+		passive,
+		rxInterval*1000,
+		txInterval*1000,
+		detectMult,
+		echoInterval,
+		c.eventDispatcher,
+		f,
+		authType,
+		authKeyID,
+		authKey,
+	)
+	slogger.Debugf("Creating BFD Echo session with auth for remote %s (echoInterval=%dms, authType=%v).", remote, echoInterval, authType)
 	c.sessions = append(c.sessions, nsession)
 }
 
@@ -111,6 +156,26 @@ func (c *Control) AddDemandSession(remote string, passive bool, rxInterval, txIn
 	c.sessions = append(c.sessions, nsession)
 }
 
+func (c *Control) AddDemandSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult int,
+	authType layers.BFDAuthType, authKeyID uint8, authKey string, f CallbackFunc) {
+	nsession := NewDemandSessionWithAuth(
+		c.Local,
+		remote,
+		c.Family,
+		passive,
+		rxInterval*1000,
+		txInterval*1000,
+		detectMult,
+		c.eventDispatcher,
+		f,
+		authType,
+		authKeyID,
+		authKey,
+	)
+	slogger.Debugf("Creating BFD Demand session with auth for remote %s (authType=%v).", remote, authType)
+	c.sessions = append(c.sessions, nsession)
+}
+
 // //// 添加需要检测的实例 (启用 Multihop 模式) ///////
 // Multihop 模式(RFC 5883): 使用 UDP 端口 4784, 发送方设置 TTL=255,
 // 用于检测非直连的多跳路径
@@ -127,6 +192,26 @@ func (c *Control) AddMultihopSession(remote string, passive bool, rxInterval, tx
 		f,
 	)
 	slogger.Debugf("Creating BFD Multihop session for remote %s.", remote)
+	c.sessions = append(c.sessions, nsession)
+}
+
+func (c *Control) AddMultihopSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult int,
+	authType layers.BFDAuthType, authKeyID uint8, authKey string, f CallbackFunc) {
+	nsession := NewMultihopSessionWithAuth(
+		c.Local,
+		remote,
+		c.Family,
+		passive,
+		rxInterval*1000,
+		txInterval*1000,
+		detectMult,
+		c.eventDispatcher,
+		f,
+		authType,
+		authKeyID,
+		authKey,
+	)
+	slogger.Debugf("Creating BFD Multihop session with auth for remote %s (authType=%v).", remote, authType)
 	c.sessions = append(c.sessions, nsession)
 }
 

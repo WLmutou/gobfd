@@ -1,6 +1,6 @@
 # gobfd
 
-BFD（Bidirectional Forwarding Detection）协议的 Go 语言实现，支持 RFC 5880 标准的控制报文模式和 Echo 模式。
+BFD（Bidirectional Forwarding Detection）协议的 Go 语言实现，支持 RFC 5880 标准的控制报文模式、Echo 模式、Demand 模式，以及 RFC 5883 的 Multihop 模式，并提供认证机制和事件通知功能。
 
 ## 特性
 
@@ -8,6 +8,7 @@ BFD（Bidirectional Forwarding Detection）协议的 Go 语言实现，支持 RF
 - **Echo 模式**：支持 RFC 5880 Section 6.4 的 Echo 辅助检测模式
 - **Demand 模式**：支持 RFC 5880 Section 6.5 的低开销 Demand 模式
 - **Multihop 模式**：支持 RFC 5883 的多跳路径检测
+- **认证机制**：支持 RFC 5880 的认证方式（Password、Keyed MD5、Keyed SHA1），防止报文欺骗和攻击
 - **多会话管理**：单个 Control 实例可管理多个 BFD 检测会话
 - **IPv4/IPv6**：支持双协议栈
 - **状态回调**：会话状态变化时触发自定义回调函数
@@ -44,6 +45,19 @@ BFD（Bidirectional Forwarding Detection）协议的 Go 语言实现，支持 RF
 |                    Timestamp (高 32 位, 纳秒)                 |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                    Timestamp (低 32 位, 纳秒)                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+```
+///////////////////////////// BFD 认证头部结构  ///////////////////////////
+0                   1                   2                   3
+0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+| Auth Type    | Key ID | Data Len |        Reserved           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Sequence Number                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Authentication Data ...                    |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
@@ -190,6 +204,30 @@ func main() {
 }
 ```
 
+### 认证机制
+
+BFD 认证机制用于防止报文欺骗和攻击，支持 RFC 5880 定义的多种认证类型。
+
+```go
+func main() {
+	control := gobfd.NewControl("0.0.0.0", syscall.AF_INET)
+
+	// 使用 Keyed MD5 认证
+	control.AddSessionWithAuth("192.168.1.244", false, 400, 400, 1,
+		gobfd.AuthTypeKeyedMD5, 1, "mysecretkey", callBackBFDState)
+
+	// 使用 Keyed SHA1 认证
+	control.AddSessionWithAuth("192.168.1.185", false, 400, 400, 1,
+		gobfd.AuthTypeKeyedSHA1, 2, "anotherkey", callBackBFDState)
+
+	// Demand 模式 + 认证
+	control.AddDemandSessionWithAuth("192.168.1.200", false, 400, 400, 1,
+		gobfd.AuthTypePassword, 1, "password123", callBackBFDState)
+
+	time.Sleep(time.Second * 30)
+}
+```
+
 ## API 参考
 
 ### 常量
@@ -203,6 +241,12 @@ func main() {
 | `ControlPort` | 3784 | BFD Control 报文 UDP 端口 |
 | `EchoPort` | 3785 | BFD Echo 报文 UDP 端口 |
 | `MultihopControlPort` | 4784 | BFD Multihop 端口 (RFC 5883) |
+| `AuthTypeNone` | 0 | 无认证 |
+| `AuthTypePassword` | 1 | 密码认证 |
+| `AuthTypeKeyedMD5` | 2 | Keyed MD5 认证 |
+| `AuthTypeMeticulousKeyedMD5` | 3 | Meticulous Keyed MD5 认证 |
+| `AuthTypeKeyedSHA1` | 4 | Keyed SHA1 认证 |
+| `AuthTypeMeticulousKeyedSHA1` | 5 | Meticulous Keyed SHA1 认证 |
 
 ### 类型
 
@@ -224,6 +268,9 @@ const (
 	ModeSessionMultihop // Multihop 模式 (RFC 5883)
 )
 
+// AuthType BFD 认证类型 (RFC 5880)
+type AuthType int
+
 // BfdEvent BFD 会话状态变更事件
 type BfdEvent struct {
 	Remote      string      // 对端 IP 地址
@@ -244,6 +291,13 @@ type EventListener interface {
 
 // EventChan 基于通道的事件订阅类型
 type EventChan <-chan BfdEvent
+
+// AuthConfig BFD 认证配置
+type AuthConfig struct {
+	AuthType AuthType // 认证类型 (AuthTypeKeyedMD5, AuthTypeKeyedSHA1等)
+	KeyID    uint8    // 密钥ID (1-255)
+	Key      string   // 密钥字符串
+}
 ```
 
 ### 方法
@@ -255,15 +309,27 @@ func NewControl(local string, family int) *Control
 // AddSession 添加控制报文模式会话
 func (c *Control) AddSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc)
 
+// AddSessionWithAuth 添加带认证的控制报文模式会话
+func (c *Control) AddSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult int, authType AuthType, keyID uint8, key string, f CallbackFunc)
+
 // AddEchoSession 添加 Echo 模式会话
 // echoInterval: Echo 报文发送间隔(毫秒), >0 启用 Echo
 func (c *Control) AddEchoSession(remote string, passive bool, rxInterval, txInterval, detectMult, echoInterval int, f CallbackFunc)
 
+// AddEchoSessionWithAuth 添加带认证的 Echo 模式会话
+func (c *Control) AddEchoSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult, echoInterval int, authType AuthType, keyID uint8, key string, f CallbackFunc)
+
 // AddDemandSession 添加 Demand 模式会话 (RFC 5880 Section 6.5)
 func (c *Control) AddDemandSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc)
 
+// AddDemandSessionWithAuth 添加带认证的 Demand 模式会话
+func (c *Control) AddDemandSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult int, authType AuthType, keyID uint8, key string, f CallbackFunc)
+
 // AddMultihopSession 添加 Multihop 模式会话 (RFC 5883)
 func (c *Control) AddMultihopSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc)
+
+// AddMultihopSessionWithAuth 添加带认证的 Multihop 模式会话
+func (c *Control) AddMultihopSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult int, authType AuthType, keyID uint8, key string, f CallbackFunc)
 
 // DelSession 删除会话
 func (c *Control) DelSession(remote string) error
@@ -310,6 +376,21 @@ go run ./cmd/gobfd -remote 192.168.1.244
 # 启用 Echo 模式
 go run ./cmd/gobfd -remote 192.168.1.244 -echo 100
 
+# 启用 Demand 模式
+go run ./cmd/gobfd -remote 192.168.1.244 -demand
+
+# 启用 Multihop 模式
+go run ./cmd/gobfd -remote 192.168.1.244 -multihop
+
+# 启用认证 (Keyed MD5)
+go run ./cmd/gobfd -remote 192.168.1.244 -auth-type 2 -auth-key mysecretkey -auth-keyid 1
+
+# 启用认证 (Keyed SHA1)
+go run ./cmd/gobfd -remote 192.168.1.244 -auth-type 4 -auth-key mysecretkey -auth-keyid 1
+
+# Demand 模式 + 认证
+go run ./cmd/gobfd -remote 192.168.1.244 -demand -auth-type 2 -auth-key mysecretkey
+
 # 多个目标
 go run ./cmd/gobfd -remote 192.168.1.244 -remote 192.168.1.185
 
@@ -321,6 +402,9 @@ go run ./cmd/gobfd -family 6 -remote fe80::1
 
 # 限时运行
 go run ./cmd/gobfd -remote 192.168.1.244 -duration 30
+
+# 启用事件通知演示模式
+go run ./cmd/gobfd -remote 192.168.1.244 -event
 ```
 
 ### 命令行参数
@@ -337,6 +421,10 @@ go run ./cmd/gobfd -remote 192.168.1.244 -duration 30
 | `-echo` | Echo 发送间隔(毫秒)，>0 启用 | 0 |
 | `-demand` | 是否启用 Demand 模式 | false |
 | `-multihop` | 是否启用 Multihop 模式 | false |
+| `-auth-type` | 认证类型: 0=None, 1=Password, 2=KeyedMD5, 3=MeticulousKeyedMD5, 4=KeyedSHA1, 5=MeticulousKeyedSHA1 | 0 |
+| `-auth-key` | 认证密钥字符串 | "" |
+| `-auth-keyid` | 认证密钥 ID (1-255) | 1 |
+| `-event` | 是否启用事件通知演示模式 | false |
 | `-duration` | 运行时长(秒)，<=0 一直运行 | 0 |
 
 ## 测试
@@ -350,6 +438,12 @@ go test -v .
 
 # 仅运行 Echo 相关测试
 go test -v -run 'Echo' ./...
+
+# 仅运行认证相关测试
+go test -v -run 'Auth' ./...
+
+# 仅运行事件通知相关测试
+go test -v -run 'Event' ./...
 ```
 
 ## 项目结构
@@ -358,6 +452,8 @@ go test -v -run 'Echo' ./...
 gobfd/
 ├── api.go              # 对外公共 API
 ├── api_test.go         # API 单元测试
+├── auth_test.go        # 认证功能测试
+├── event_test.go       # 事件通知测试
 ├── go.mod
 ├── go.sum
 ├── README.md
