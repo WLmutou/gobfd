@@ -80,6 +80,30 @@ func (c *Control) AddEchoSession(remote string, passive bool, rxInterval, txInte
 	c.sessions = append(c.sessions, nsession)
 }
 
+////// 添加需要检测的实例 (启用 Demand 模式) ///////
+/*
+ * remote: 对端ip
+ * passive: 是否被动模式
+ * rxInterval: 接收间隔(输入毫秒单位),
+ * txInterval: 发送间隔(输入毫秒单位)
+ * detectMult:  报文最大失效的个数
+ * f: 回调函数
+ */
+func (c *Control) AddDemandSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc) {
+	nsession := NewDemandSession(
+		c.Local,
+		remote,
+		c.Family,
+		passive,
+		rxInterval*1000,
+		txInterval*1000,
+		detectMult,
+		f,
+	)
+	slogger.Debugf("Creating BFD Demand session for remote %s.", remote)
+	c.sessions = append(c.sessions, nsession)
+}
+
 // //// 删除某个需要检测的实例  /////
 func (c *Control) DelSession(remote string) error {
 	defer func() {

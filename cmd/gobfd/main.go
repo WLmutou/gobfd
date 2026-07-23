@@ -7,6 +7,7 @@
 //	go run ./cmd/gobfd -local 0.0.0.0 -remote 192.168.1.244 -rx 400 -tx 400 -mult 1
 //	go run ./cmd/gobfd -remote 192.168.1.244 -remote 192.168.1.185
 //	go run ./cmd/gobfd -remote 192.168.1.244 -echo 100   # 启用 Echo 模式
+//	go run ./cmd/gobfd -remote 192.168.1.244 -demand     # 启用 Demand 模式
 //
 // 参数:
 //
@@ -18,6 +19,7 @@
 //	-tx       发送间隔(毫秒), 默认 400
 //	-mult     报文最大失效个数, 默认 1
 //	-echo     Echo 报文发送间隔(毫秒), >0 启用 RFC 5880 Echo 模式, 默认 0(关闭)
+//	-demand   是否启用 RFC 5880 Demand 模式(低开销), 默认 false
 //	-duration 运行时长(秒), <=0 表示一直运行, 默认 0
 package main
 
@@ -76,6 +78,7 @@ func main() {
 	tx := flag.Int("tx", 400, "发送间隔(毫秒)")
 	mult := flag.Int("mult", 1, "报文最大失效个数")
 	echo := flag.Int("echo", 0, "Echo 报文发送间隔(毫秒), >0 启用 RFC 5880 Echo 模式")
+	demand := flag.Bool("demand", false, "是否启用 RFC 5880 Demand 模式(低开销)")
 	duration := flag.Int("duration", 0, "运行时长(秒), <=0 表示一直运行")
 
 	var remotes stringSliceFlag
@@ -108,6 +111,10 @@ func main() {
 			control.AddEchoSession(remote, *passive, *rx, *tx, *mult, *echo, callBackBFDState)
 			fmt.Printf("[BFD] added echo session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d echo=%dms passive=%v)\n",
 				*local, remote, *rx, *tx, *mult, *echo, *passive)
+		} else if *demand {
+			control.AddDemandSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
+			fmt.Printf("[BFD] added demand session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
+				*local, remote, *rx, *tx, *mult, *passive)
 		} else {
 			control.AddSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
 			fmt.Printf("[BFD] added session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",

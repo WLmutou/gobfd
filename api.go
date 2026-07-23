@@ -19,6 +19,12 @@ const (
 	EchoPort    = internalbfd.ECHO_PORT    // BFD Echo 报文端口 (3785)
 )
 
+// BFD 模式常量
+const (
+	ModeAsync  = false // 异步模式: 双方周期性发送 Control 报文
+	ModeDemand = true  // Demand 模式: 会话 Up 后停止周期性发送, 通过 Poll/Final 交互验证连通性
+)
+
 // CallbackFunc BFD 会话状态变化时触发的回调函数类型
 // ipAddr:   目标对端ip
 // preState: 变化前的状态 (取值为 StateXXX 常量)

@@ -87,6 +87,11 @@ type Session struct {
 
 func NewSession(local, remote string, family int, passive bool,
 	rxInterval, txInterval, detectMult int, f CallbackFunc) *Session {
+	return NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, false, 0, f)
+}
+
+func NewSessionWithOptions(local, remote string, family int, passive bool,
+	rxInterval, txInterval, detectMult int, demand bool, echoInterval int, f CallbackFunc) *Session {
 
 	if detectMult <= 0 {
 		detectMult = defaultDetectMult
@@ -114,7 +119,7 @@ func NewSession(local, remote string, family int, passive bool,
 		//desiredMinTxInterval:  DesiredMinTXInterval,
 		//requiredMinRxInterval:  uint32(rxInterval), //layers.BFDTimeInterval(rxInterval),
 		remoteMinRxInterval: 1,
-		DemandMode:          DemandMode,
+		DemandMode:          demand,
 		RemoteDemandMode:    false,
 		DetectMult:          uint8(detectMult), //layers.BFDDetectMultiplier(detectMult),
 		AuthType:            true,              //  是否需要认证
@@ -139,7 +144,7 @@ func NewSession(local, remote string, family int, passive bool,
 func NewEchoSession(local, remote string, family int, passive bool,
 	rxInterval, txInterval, detectMult, echoInterval int, f CallbackFunc) *Session {
 
-	tmpSess := NewSession(local, remote, family, passive, rxInterval, txInterval, detectMult, f)
+	tmpSess := NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, false, echoInterval, f)
 
 	if echoInterval <= 0 {
 		return tmpSess
@@ -170,9 +175,11 @@ func (s *Session) sessionLoop() {
 	}
 
 	var interval float64
+	pollTimer := time.NewTimer(time.Second)
+	pollTimer.Stop()
+
 	for {
 		if s.DetectMult == 1 {
-			// 如果bfd.DetectMult == 1, 那间隔必须不能超过 90% 和必须有不能小于75% 间隔
 			interval = float64(s.asyncTxInterval) * (rand.Float64()*0.75 + 0.15)
 		} else {
 			interval = float64(s.asyncTxInterval) * (1 - (rand.Float64() * 0) + 0.25)
@@ -180,7 +187,6 @@ func (s *Session) sessionLoop() {
 
 		select {
 		case <-s.clientDone:
-			//fmt.Println("new client ...")
 			conn, err := NewClient(s.Local, s.Remote, s.Family)
 			if err != nil {
 				s.closeConn()
@@ -189,13 +195,20 @@ func (s *Session) sessionLoop() {
 			}
 			s.conn = conn
 			s.clientDone = make(chan bool)
-			// 启动检测
 			go s.DetectFailure()
 
 		case <-s.clientQuit:
-			// 执行退出
 			s.closeConn()
+			pollTimer.Stop()
 			return
+
+		case <-pollTimer.C:
+			if s.DemandMode && s.State == layers.BFDStateUp && s.RemoteState == layers.BFDStateUp {
+				slogger.Infof("Demand mode: initiating Poll sequence to verify connectivity with %s", s.Remote)
+				s.PollSequence = true
+				s.TxPacket(false)
+			}
+			pollTimer.Reset(time.Duration(s.asyncDetectTime) * time.Microsecond / 1000)
 
 		default:
 			if !((s.RemoteDiscr == 0 && s.Passive) ||
@@ -204,12 +217,10 @@ func (s *Session) sessionLoop() {
 					(s.RemoteDemandMode == true &&
 						s.State == layers.BFDStateUp &&
 						s.RemoteState == layers.BFDStateUp))) {
-				// 判断是否应该主动发包
 				s.TxPacket(false)
 			}
-			time.Sleep(time.Duration(int(interval)) * time.Microsecond / 10) // 决定发包速度
+			time.Sleep(time.Duration(int(interval)) * time.Microsecond / 10)
 		}
-
 	}
 }
 
@@ -510,31 +521,39 @@ func (s *Session) DetectFailure() {
 		case <-s.clientDone:
 			return
 		default:
-			if !(s.DemandMode || s.asyncDetectTime == 0) {
-				if (s.State == layers.BFDStateInit || s.State == layers.BFDStateUp) &&
-					((time.Now().UnixNano()/1e6 - s.LastRxPacketTime) > (int64(s.asyncDetectTime) / 1000)) {
+			if s.asyncDetectTime == 0 {
+				time.Sleep(time.Millisecond / 10)
+				continue
+			}
+			if (s.State == layers.BFDStateInit || s.State == layers.BFDStateUp) &&
+				((time.Now().UnixNano()/1e6 - s.LastRxPacketTime) > (int64(s.asyncDetectTime) / 1000)) {
 
-					// 状态变化,执行回调函数
-					go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateDown))
+				go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateDown))
 
-					s.State = layers.BFDStateDown
-					s.LocalDiag = layers.BFDDiagnosticTimeExpired
-					s.setDesiredMinTxInterval(DesiredMinTXInterval)
+				s.State = layers.BFDStateDown
+				s.LocalDiag = layers.BFDDiagnosticTimeExpired
+				s.setDesiredMinTxInterval(DesiredMinTXInterval)
 
-					slogger.Errorf("Detected BFD remote %s going DOWN ", s.Remote)
+				slogger.Errorf("Detected BFD remote %s going DOWN ", s.Remote)
 
-					slogger.Infof("Time since last packet: %d ms; Detect Time: %d ms ", (time.Now().UnixNano()/1e6 - s.LastRxPacketTime), int64(s.asyncDetectTime)/1000)
+				slogger.Infof("Time since last packet: %d ms; Detect Time: %d ms ", (time.Now().UnixNano()/1e6 - s.LastRxPacketTime), int64(s.asyncDetectTime)/1000)
 
-					//fmt.Printf("Detected BFD remote %s going DOWN \n", s.Remote)
-					fmt.Printf("Time since last packet: %d ms; Detect Time: %d ms \n", (time.Now().UnixNano()/1e6 - s.LastRxPacketTime), int64(s.asyncDetectTime)/1000)
+				fmt.Printf("Time since last packet: %d ms; Detect Time: %d ms \n", (time.Now().UnixNano()/1e6 - s.LastRxPacketTime), int64(s.asyncDetectTime)/1000)
 
-				}
 			}
 
-			time.Sleep(time.Millisecond / 10) // 这里等待时间, 如果太短,cpu占用就大,等待时长,最后的结果不是很准
-
+			time.Sleep(time.Millisecond / 10)
 		}
 	}
+}
+
+// NewDemandSession 创建一个启用 Demand 模式的 BFD 会话
+// Demand 模式(RFC 5880 Section 6.5): 会话建立后, 对端可停止周期性发送 Control 报文,
+// 仅在需要验证连通性时才触发 Poll/Final 交互, 从而降低开销
+func NewDemandSession(local, remote string, family int, passive bool,
+	rxInterval, txInterval, detectMult int, f CallbackFunc) *Session {
+
+	return NewSessionWithOptions(local, remote, family, passive, rxInterval, txInterval, detectMult, true, 0, f)
 }
 
 //////////////////////////////// Echo 模式 (RFC 5880 Section 6.4) ////////////////////////////////
