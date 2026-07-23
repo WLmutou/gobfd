@@ -1,23 +1,23 @@
 # gobfd
 
-A Go implementation of the BFD (Bidirectional Forwarding Detection) protocol, supporting RFC 5880 Control mode, Echo mode, Demand mode, RFC 5883 Multihop mode, as well as authentication mechanism and event notification functionality.
+BFD（Bidirectional Forwarding Detection）协议的 Go 语言实现，支持 RFC 5880 标准的控制报文模式、Echo 模式、Demand 模式，以及 RFC 5883 的 Multihop 模式，并提供认证机制和事件通知功能。
 
-## Features
+## 特性
 
-- **RFC 5880 Compliant**: Full implementation of BFD control packet protocol
-- **Echo Mode**: Support for RFC 5880 Section 6.4 Echo auxiliary detection mode
-- **Demand Mode**: Support for RFC 5880 Section 6.5 low-overhead Demand mode
-- **Multihop Mode**: Support for RFC 5883 multihop path detection
-- **Authentication**: Support for RFC 5880 authentication methods (Password, Keyed MD5, Keyed SHA1) to prevent packet spoofing and attacks
-- **Multi-session Management**: Single Control instance can manage multiple BFD detection sessions
-- **IPv4/IPv6**: Dual-stack support
-- **State Callback**: Custom callback function triggered on session state changes
-- **Event Notification**: Session state change notifications for upper-layer protocols (OSPF/BGP etc.), supporting both interface-based and channel-based subscription modes
+- **RFC 5880 兼容**：完整实现 BFD 控制报文协议
+- **Echo 模式**：支持 RFC 5880 Section 6.4 的 Echo 辅助检测模式
+- **Demand 模式**：支持 RFC 5880 Section 6.5 的低开销 Demand 模式
+- **Multihop 模式**：支持 RFC 5883 的多跳路径检测
+- **认证机制**：支持 RFC 5880 的认证方式（Password、Keyed MD5、Keyed SHA1），防止报文欺骗和攻击
+- **多会话管理**：单个 Control 实例可管理多个 BFD 检测会话
+- **IPv4/IPv6**：支持双协议栈
+- **状态回调**：会话状态变化时触发自定义回调函数
+- **事件通知机制**：为上层协议(OSPF/BGP等)提供会话状态变更事件通知，支持接口方式和通道方式两种订阅模式
 
-## BFD Frame Structure
+## BFD 帧结构
 
 ```
-///////////////////////////// BFD Control Frame Structure ///////////////////////////
+///////////////////////////// BFD Control 帧结构  ///////////////////////////
 0                   1                   2                   3
 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -36,20 +36,20 @@ A Go implementation of the BFD (Bidirectional Forwarding Detection) protocol, su
 ```
 
 ```
-///////////////////////////// BFD Echo Frame Structure ///////////////////////////
+///////////////////////////// BFD Echo 帧结构  ///////////////////////////
 0                   1                   2                   3
 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                    My Discriminator                          |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|              Timestamp (High 32 bits, nanoseconds)           |
+|                    Timestamp (高 32 位, 纳秒)                 |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|              Timestamp (Low 32 bits, nanoseconds)            |
+|                    Timestamp (低 32 位, 纳秒)                 |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
 ```
-///////////////////////////// BFD Authentication Header Structure ///////////////////////////
+///////////////////////////// BFD 认证头部结构  ///////////////////////////
 0                   1                   2                   3
 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -61,15 +61,15 @@ A Go implementation of the BFD (Bidirectional Forwarding Detection) protocol, su
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-## Installation
+## 安装
 
 ```bash
 go get github.com/WLmutou/gobfd
 ```
 
-## Quick Start
+## 快速开始
 
-### Basic Usage (Control Mode)
+### 基础用法（控制报文模式）
 
 ```go
 package main
@@ -124,15 +124,15 @@ func main() {
 }
 ```
 
-### Echo Mode
+### Echo 模式
 
-Echo mode is an auxiliary detection mode where the local end sends Echo packets, and the remote end loops them back at the network layer for detecting actual forwarding path latency and health.
+Echo 模式是一种辅助检测模式，本端发送 Echo 报文，对端在网络层直接环回，用于检测转发路径的实际时延和健康度。
 
 ```go
 func main() {
 	control := gobfd.NewControl("0.0.0.0", syscall.AF_INET)
 
-	// Enable Echo mode with echoInterval > 0
+	// 启用 Echo 模式，echoInterval > 0
 	control.AddEchoSession("192.168.1.244", false, 400, 400, 1, 100, callBackBFDState)
 
 	time.Sleep(time.Second * 30)
@@ -140,14 +140,14 @@ func main() {
 }
 ```
 
-### Event Notification (Integration with Upper-layer Protocols)
+### 事件通知机制（与上层协议联动）
 
-The value of BFD lies in providing fast failure notifications for routing protocols like OSPF and BGP. gobfd provides two subscription methods:
+BFD 的价值在于为 OSPF、BGP 等路由协议提供快速故障通知。gobfd 提供了两种订阅方式：
 
-#### Method 1: Interface-based (EventListener)
+#### 方式一：接口方式（EventListener）
 
 ```go
-// Implement the EventListener interface
+// 实现 EventListener 接口
 type MyRouteProtocol struct{}
 
 func (m *MyRouteProtocol) OnBfdEvent(event gobfd.BfdEvent) {
@@ -155,7 +155,7 @@ func (m *MyRouteProtocol) OnBfdEvent(event gobfd.BfdEvent) {
 		stateName(event.PreState), stateName(event.CurState), event.Remote)
 	
 	if event.CurState == gobfd.StateDown {
-		// Trigger route convergence, switch to backup path
+		// 触发路由收敛，切换到备用路径
 		fmt.Println("Triggering route convergence...")
 	}
 }
@@ -163,30 +163,30 @@ func (m *MyRouteProtocol) OnBfdEvent(event gobfd.BfdEvent) {
 func main() {
 	control := gobfd.NewControl("0.0.0.0", syscall.AF_INET)
 	
-	// Subscribe to events
+	// 订阅事件
 	ospf := &MyRouteProtocol{}
 	control.Subscribe(ospf)
 	
-	// Add session
+	// 添加会话
 	control.AddSession("192.168.1.244", false, 400, 400, 1, callBackBFDState)
 	
 	time.Sleep(time.Second * 30)
 	
-	// Unsubscribe
+	// 取消订阅
 	control.Unsubscribe(ospf)
 }
 ```
 
-#### Method 2: Channel-based (EventChan)
+#### 方式二：通道方式（EventChan）
 
 ```go
 func main() {
 	control := gobfd.NewControl("0.0.0.0", syscall.AF_INET)
 	
-	// Subscribe via channel with buffer size of 10
+	// 通过通道订阅，缓冲区大小为 10
 	eventChan := control.SubscribeChan(10)
 	
-	// Start event processing goroutine
+	// 启动事件处理协程
 	go func() {
 		for event := range eventChan {
 			fmt.Printf("[BGP] BFD state change: %s -> %s for %s (mode=%v)\n",
@@ -199,28 +199,28 @@ func main() {
 	
 	time.Sleep(time.Second * 30)
 	
-	// Unsubscribe
+	// 取消订阅
 	control.UnsubscribeChan(eventChan)
 }
 ```
 
-### Authentication
+### 认证机制
 
-BFD authentication mechanism is used to prevent packet spoofing and attacks, supporting multiple authentication types defined in RFC 5880.
+BFD 认证机制用于防止报文欺骗和攻击，支持 RFC 5880 定义的多种认证类型。
 
 ```go
 func main() {
 	control := gobfd.NewControl("0.0.0.0", syscall.AF_INET)
 
-	// Use Keyed MD5 authentication
+	// 使用 Keyed MD5 认证
 	control.AddSessionWithAuth("192.168.1.244", false, 400, 400, 1,
 		gobfd.AuthTypeKeyedMD5, 1, "mysecretkey", callBackBFDState)
 
-	// Use Keyed SHA1 authentication
+	// 使用 Keyed SHA1 认证
 	control.AddSessionWithAuth("192.168.1.185", false, 400, 400, 1,
 		gobfd.AuthTypeKeyedSHA1, 2, "anotherkey", callBackBFDState)
 
-	// Demand mode + authentication
+	// Demand 模式 + 认证
 	control.AddDemandSessionWithAuth("192.168.1.200", false, 400, 400, 1,
 		gobfd.AuthTypePassword, 1, "password123", callBackBFDState)
 
@@ -228,248 +228,248 @@ func main() {
 }
 ```
 
-## API Reference
+## API 参考
 
-### Constants
+### 常量
 
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `StateAdminDown` | 0 | Admin Down state |
-| `StateDown` | 1 | Down state |
-| `StateInit` | 2 | Init state |
-| `StateUp` | 3 | Up state |
-| `ControlPort` | 3784 | BFD Control packet UDP port |
-| `EchoPort` | 3785 | BFD Echo packet UDP port |
-| `MultihopControlPort` | 4784 | BFD Multihop port (RFC 5883) |
-| `AuthTypeNone` | 0 | No authentication |
-| `AuthTypePassword` | 1 | Password authentication |
-| `AuthTypeKeyedMD5` | 2 | Keyed MD5 authentication |
-| `AuthTypeMeticulousKeyedMD5` | 3 | Meticulous Keyed MD5 authentication |
-| `AuthTypeKeyedSHA1` | 4 | Keyed SHA1 authentication |
-| `AuthTypeMeticulousKeyedSHA1` | 5 | Meticulous Keyed SHA1 authentication |
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `StateAdminDown` | 0 | 管理 Down 状态 |
+| `StateDown` | 1 | Down 状态 |
+| `StateInit` | 2 | Init 状态 |
+| `StateUp` | 3 | Up 状态 |
+| `ControlPort` | 3784 | BFD Control 报文 UDP 端口 |
+| `EchoPort` | 3785 | BFD Echo 报文 UDP 端口 |
+| `MultihopControlPort` | 4784 | BFD Multihop 端口 (RFC 5883) |
+| `AuthTypeNone` | 0 | 无认证 |
+| `AuthTypePassword` | 1 | 密码认证 |
+| `AuthTypeKeyedMD5` | 2 | Keyed MD5 认证 |
+| `AuthTypeMeticulousKeyedMD5` | 3 | Meticulous Keyed MD5 认证 |
+| `AuthTypeKeyedSHA1` | 4 | Keyed SHA1 认证 |
+| `AuthTypeMeticulousKeyedSHA1` | 5 | Meticulous Keyed SHA1 认证 |
 
-### Types
+### 类型
 
 ```go
-// CallbackFunc Session state change callback function
+// CallbackFunc 会话状态变化回调函数
 type CallbackFunc func(ipAddr string, preState, curState int) error
 
-// Control BFD control instance, manages packet sending/receiving and state machines for multiple detection sessions
-// Created via NewControl, should not be constructed directly
+// Control BFD 控制实例, 负责管理多个检测会话的收发包与状态机
+// 通过 NewControl 创建, 不应直接构造
 type Control struct{ ... }
 
-// SessionMode BFD session mode
+// SessionMode BFD 会话模式
 type SessionMode int
 
 const (
-	ModeSessionAsync   // Async mode
-	ModeSessionDemand  // Demand mode (RFC 5880 Section 6.5)
-	ModeSessionEcho    // Echo mode (RFC 5880 Section 6.4)
-	ModeSessionMultihop // Multihop mode (RFC 5883)
+	ModeSessionAsync   // 异步模式
+	ModeSessionDemand  // Demand 模式 (RFC 5880 Section 6.5)
+	ModeSessionEcho    // Echo 模式 (RFC 5880 Section 6.4)
+	ModeSessionMultihop // Multihop 模式 (RFC 5883)
 )
 
-// AuthType BFD authentication type (RFC 5880)
+// AuthType BFD 认证类型 (RFC 5880)
 type AuthType int
 
-// BfdEvent BFD session state change event
+// BfdEvent BFD 会话状态变更事件
 type BfdEvent struct {
-	Remote      string      // Remote IP address
-	Local       string      // Local IP address
-	Family      int         // Protocol family (AF_INET / AF_INET6)
-	Mode        SessionMode // Session mode
-	PreState    int         // State before change (StateXXX constants)
-	CurState    int         // State after change (StateXXX constants)
-	Timestamp   time.Time   // Event timestamp
-	Discr       uint32      // Local discriminator
-	RemoteDiscr uint32      // Remote discriminator
+	Remote      string      // 对端 IP 地址
+	Local       string      // 本地 IP 地址
+	Family      int         // 协议家族 (AF_INET / AF_INET6)
+	Mode        SessionMode // 会话模式
+	PreState    int         // 变化前状态 (StateXXX 常量)
+	CurState    int         // 变化后状态 (StateXXX 常量)
+	Timestamp   time.Time   // 事件发生时间
+	Discr       uint32      // 本地 Discriminator
+	RemoteDiscr uint32      // 对端 Discriminator
 }
 
-// EventListener BFD event listener interface
+// EventListener BFD 事件监听器接口
 type EventListener interface {
 	OnBfdEvent(event BfdEvent)
 }
 
-// EventChan Channel-based event subscription type
+// EventChan 基于通道的事件订阅类型
 type EventChan <-chan BfdEvent
 
-// AuthConfig BFD authentication configuration
+// AuthConfig BFD 认证配置
 type AuthConfig struct {
-	AuthType AuthType // Authentication type (AuthTypeKeyedMD5, AuthTypeKeyedSHA1 etc.)
-	KeyID    uint8    // Key ID (1-255)
-	Key      string   // Key string
+	AuthType AuthType // 认证类型 (AuthTypeKeyedMD5, AuthTypeKeyedSHA1等)
+	KeyID    uint8    // 密钥ID (1-255)
+	Key      string   // 密钥字符串
 }
 ```
 
-### Methods
+### 方法
 
 ```go
-// NewControl Create and start a BFD control instance
+// NewControl 创建并启动 BFD 控制实例
 func NewControl(local string, family int) *Control
 
-// AddSession Add control packet mode session
+// AddSession 添加控制报文模式会话
 func (c *Control) AddSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc)
 
-// AddSessionWithAuth Add control packet mode session with authentication
+// AddSessionWithAuth 添加带认证的控制报文模式会话
 func (c *Control) AddSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult int, authType AuthType, keyID uint8, key string, f CallbackFunc)
 
-// AddEchoSession Add Echo mode session
-// echoInterval: Echo packet sending interval (ms), >0 enables Echo
+// AddEchoSession 添加 Echo 模式会话
+// echoInterval: Echo 报文发送间隔(毫秒), >0 启用 Echo
 func (c *Control) AddEchoSession(remote string, passive bool, rxInterval, txInterval, detectMult, echoInterval int, f CallbackFunc)
 
-// AddEchoSessionWithAuth Add Echo mode session with authentication
+// AddEchoSessionWithAuth 添加带认证的 Echo 模式会话
 func (c *Control) AddEchoSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult, echoInterval int, authType AuthType, keyID uint8, key string, f CallbackFunc)
 
-// AddDemandSession Add Demand mode session (RFC 5880 Section 6.5)
+// AddDemandSession 添加 Demand 模式会话 (RFC 5880 Section 6.5)
 func (c *Control) AddDemandSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc)
 
-// AddDemandSessionWithAuth Add Demand mode session with authentication
+// AddDemandSessionWithAuth 添加带认证的 Demand 模式会话
 func (c *Control) AddDemandSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult int, authType AuthType, keyID uint8, key string, f CallbackFunc)
 
-// AddMultihopSession Add Multihop mode session (RFC 5883)
+// AddMultihopSession 添加 Multihop 模式会话 (RFC 5883)
 func (c *Control) AddMultihopSession(remote string, passive bool, rxInterval, txInterval, detectMult int, f CallbackFunc)
 
-// AddMultihopSessionWithAuth Add Multihop mode session with authentication
+// AddMultihopSessionWithAuth 添加带认证的 Multihop 模式会话
 func (c *Control) AddMultihopSessionWithAuth(remote string, passive bool, rxInterval, txInterval, detectMult int, authType AuthType, keyID uint8, key string, f CallbackFunc)
 
-// DelSession Delete session
+// DelSession 删除会话
 func (c *Control) DelSession(remote string) error
 
-// Subscribe Subscribe to BFD events via interface
+// Subscribe 通过接口方式订阅 BFD 事件
 func (c *Control) Subscribe(listener EventListener)
 
-// SubscribeChan Subscribe to BFD events via channel
+// SubscribeChan 通过通道方式订阅 BFD 事件
 func (c *Control) SubscribeChan(bufSize int) EventChan
 
-// Unsubscribe Unsubscribe from interface-based subscription
+// Unsubscribe 取消接口方式订阅
 func (c *Control) Unsubscribe(listener EventListener)
 
-// UnsubscribeChan Unsubscribe from channel-based subscription
+// UnsubscribeChan 取消通道方式订阅
 func (c *Control) UnsubscribeChan(ch EventChan)
 ```
 
-## Echo Mode Working Principle
+## Echo 模式工作原理
 
 ```
-Host A (Echo Sender)                   Host B (Echo Reflector)
+主机A (Echo发送端)                    主机B (Echo反射端)
     |                                     |
-    |-- Echo packet --> Port 3785 -------->|
-    |                  loop back          |
-    |<-- Echo reply <-- Port 3785 <-------|
+    |-- Echo报文 --> 3785端口 ----------->|
+    |                       原样环回       |
+    |<-- Echo回送 <-- 3785端口 <-----------|
     |                                     |
-    Detection: No reply within echoDetectTime => Down
-    Measurement: RTT calculation via Timestamp
+    检测: echoDetectTime内未收到回送 => Down
+    度量: 通过Timestamp计算RTT
 ```
 
-- **Sender**: Sends timestamped Echo packets to remote port 3785
-- **Reflector**: Receives Echo packets and loops them back to the sender (implemented via EchoServer)
-- **Timeout Detection**: Session state changes to Down if no reply is received within `detectMult * echoInterval`
-- **RTT Calculation**: Round-trip time is calculated using timestamps in the packets
+- **发送端**：向对端 3785 端口发送带时间戳的 Echo 报文
+- **反射端**：收到 Echo 报文后原样回送给发送方（通过 EchoServer 实现）
+- **超时检测**：若在 `detectMult * echoInterval` 时间内未收到回送，会话状态转为 Down
+- **RTT 计算**：通过报文中的 Timestamp 计算往返时延
 
-## Command Line Tool
+## 命令行工具
 
-The project provides a runnable command-line example:
+项目提供了可运行的命令行示例：
 
 ```bash
-# Basic usage
+# 基础用法
 go run ./cmd/gobfd -remote 192.168.1.244
 
-# Enable Echo mode
+# 启用 Echo 模式
 go run ./cmd/gobfd -remote 192.168.1.244 -echo 100
 
-# Enable Demand mode
+# 启用 Demand 模式
 go run ./cmd/gobfd -remote 192.168.1.244 -demand
 
-# Enable Multihop mode
+# 启用 Multihop 模式
 go run ./cmd/gobfd -remote 192.168.1.244 -multihop
 
-# Enable authentication (Keyed MD5)
+# 启用认证 (Keyed MD5)
 go run ./cmd/gobfd -remote 192.168.1.244 -auth-type 2 -auth-key mysecretkey -auth-keyid 1
 
-# Enable authentication (Keyed SHA1)
+# 启用认证 (Keyed SHA1)
 go run ./cmd/gobfd -remote 192.168.1.244 -auth-type 4 -auth-key mysecretkey -auth-keyid 1
 
-# Demand mode + authentication
+# Demand 模式 + 认证
 go run ./cmd/gobfd -remote 192.168.1.244 -demand -auth-type 2 -auth-key mysecretkey
 
-# Multiple targets
+# 多个目标
 go run ./cmd/gobfd -remote 192.168.1.244 -remote 192.168.1.185
 
-# Custom parameters
+# 自定义参数
 go run ./cmd/gobfd -local 0.0.0.0 -remote 192.168.1.244 -rx 400 -tx 400 -mult 1
 
 # IPv6
 go run ./cmd/gobfd -family 6 -remote fe80::1
 
-# Run with duration
+# 限时运行
 go run ./cmd/gobfd -remote 192.168.1.244 -duration 30
 
-# Enable event notification demo mode
+# 启用事件通知演示模式
 go run ./cmd/gobfd -remote 192.168.1.244 -event
 ```
 
-### Command Line Parameters
+### 命令行参数
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `-local` | Local binding IP | 0.0.0.0 |
-| `-family` | Protocol family: 4=IPv4, 6=IPv6 | 4 |
-| `-remote` | Remote IP, can be specified multiple times | Required |
-| `-passive` | Passive mode | false |
-| `-rx` | Receive interval (ms) | 400 |
-| `-tx` | Transmit interval (ms) | 400 |
-| `-mult` | Maximum failure multiplier | 1 |
-| `-echo` | Echo transmit interval (ms), >0 to enable | 0 |
-| `-demand` | Enable Demand mode | false |
-| `-multihop` | Enable Multihop mode | false |
-| `-auth-type` | Auth type: 0=None, 1=Password, 2=KeyedMD5, 3=MeticulousKeyedMD5, 4=KeyedSHA1, 5=MeticulousKeyedSHA1 | 0 |
-| `-auth-key` | Authentication key string | "" |
-| `-auth-keyid` | Authentication key ID (1-255) | 1 |
-| `-event` | Enable event notification demo mode | false |
-| `-duration` | Run duration (seconds), <=0 for infinite | 0 |
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-local` | 本地绑定 IP | 0.0.0.0 |
+| `-family` | 协议家族: 4=IPv4, 6=IPv6 | 4 |
+| `-remote` | 对端 IP，可多次指定 | 必填 |
+| `-passive` | 是否被动模式 | false |
+| `-rx` | 接收间隔(毫秒) | 400 |
+| `-tx` | 发送间隔(毫秒) | 400 |
+| `-mult` | 报文最大失效个数 | 1 |
+| `-echo` | Echo 发送间隔(毫秒)，>0 启用 | 0 |
+| `-demand` | 是否启用 Demand 模式 | false |
+| `-multihop` | 是否启用 Multihop 模式 | false |
+| `-auth-type` | 认证类型: 0=None, 1=Password, 2=KeyedMD5, 3=MeticulousKeyedMD5, 4=KeyedSHA1, 5=MeticulousKeyedSHA1 | 0 |
+| `-auth-key` | 认证密钥字符串 | "" |
+| `-auth-keyid` | 认证密钥 ID (1-255) | 1 |
+| `-event` | 是否启用事件通知演示模式 | false |
+| `-duration` | 运行时长(秒)，<=0 一直运行 | 0 |
 
-## Testing
+## 测试
 
 ```bash
-# Run all tests
+# 运行所有测试
 go test -v ./...
 
-# Run only root package tests
+# 仅运行根包测试
 go test -v .
 
-# Run only Echo-related tests
+# 仅运行 Echo 相关测试
 go test -v -run 'Echo' ./...
 
-# Run only authentication-related tests
+# 仅运行认证相关测试
 go test -v -run 'Auth' ./...
 
-# Run only event notification-related tests
+# 仅运行事件通知相关测试
 go test -v -run 'Event' ./...
 ```
 
-## Project Structure
+## 项目结构
 
 ```
 gobfd/
-├── api.go              # Public API
-├── api_test.go         # API unit tests
-├── auth_test.go        # Authentication tests
-├── event_test.go       # Event notification tests
+├── api.go              # 对外公共 API
+├── api_test.go         # API 单元测试
+├── auth_test.go        # 认证功能测试
+├── event_test.go       # 事件通知测试
 ├── go.mod
 ├── go.sum
-├── README.md           # English documentation
-├── README.zh.md        # Chinese documentation
+├── README.md           # 英文文档
+├── README.zh.md        # 中文文档
 ├── cmd/
 │   └── gobfd/
-│       └── main.go     # Command-line example
-└── internal/           # Internal implementation
-    ├── control.go      # Control layer
+│       └── main.go     # 命令行示例
+└── internal/           # 内部实现
+    ├── control.go      # 控制层
     ├── control_test.go
-    ├── event.go        # Event notification system (for upper-layer protocol integration)
-    ├── log.go          # Logging
-    ├── packet.go       # Packet encoding/decoding
+    ├── event.go        # 事件通知系统(与上层协议联动)
+    ├── log.go          # 日志
+    ├── packet.go       # 报文编解码
     ├── packet_test.go
-    ├── session.go      # Session state machine
-    └── transport.go    # Transport layer (UDP server/Echo reflector)
+    ├── session.go      # 会话状态机
+    └── transport.go    # 传输层(UDP服务器/Echo反射器)
 ```
 
 ## Interoperability Test Report
