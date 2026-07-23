@@ -1,4 +1,4 @@
-module gobfd
+module github.com/WLmutou/gobfd
 
 go 1.25.0
 

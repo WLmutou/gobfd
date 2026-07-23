@@ -4,6 +4,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/gopacket/layers"
 )
@@ -111,5 +112,46 @@ func TestCallbackFunc(t *testing.T) {
 	}
 	if gotIP != testRemote || gotPre != StateDown || gotCur != StateUp {
 		t.Errorf("callback got ip=%q pre=%d cur=%d", gotIP, gotPre, gotCur)
+	}
+}
+
+func TestEchoPortConstant(t *testing.T) {
+	if ControlPort != 3784 {
+		t.Errorf("ControlPort = %d, want 3784", ControlPort)
+	}
+	if EchoPort != 3785 {
+		t.Errorf("EchoPort = %d, want 3785", EchoPort)
+	}
+}
+
+func TestAddEchoSession(t *testing.T) {
+	c := getControl()
+	cb := func(ipAddr string, pre, cur int) error { return nil }
+
+	// 添加 Echo 会话不应 panic
+	c.AddEchoSession(testRemote, false, 400, 400, 1, 100, cb)
+
+	// 清理, 验证删除 Echo 会话不阻塞
+	if err := c.DelSession(testRemote); err != nil {
+		t.Fatalf("cleanup DelSession error: %v", err)
+	}
+}
+
+func TestDelEchoSessionNotBlock(t *testing.T) {
+	// 验证删除已退出的 Echo 会话不会因 echoQuit 阻塞
+	c := getControl()
+	cb := func(ipAddr string, pre, cur int) error { return nil }
+	c.AddEchoSession("127.0.0.3", false, 400, 400, 1, 50, cb)
+
+	done := make(chan struct{})
+	go func() {
+		_ = c.DelSession("127.0.0.3")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("DelSession on echo session blocked")
 	}
 }

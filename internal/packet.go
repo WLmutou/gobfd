@@ -1,12 +1,13 @@
 package gobfd
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 )
-
 
 /*
 
@@ -32,15 +33,14 @@ import (
 var (
 	//
 	PACKET_DEBUG_MSG = "\n|--------------------------------------------------\n" +
-						"| Vers: %d Diag: %d State: %d Poll: %d Final: %d\n"  +
-						"| CPI: %d Auth: %d Demand: %d Multi: %d DetectMult: %d\n" +
-						"| Length: %d MyDisc: %d YourDisc: %d\n" +
-						"| TxInterval: %d RxInterval: %d EchoRxInterval: %d\n" +
-						"|--------------------------------------------------"
-
+		"| Vers: %d Diag: %d State: %d Poll: %d Final: %d\n" +
+		"| CPI: %d Auth: %d Demand: %d Multi: %d DetectMult: %d\n" +
+		"| Length: %d MyDisc: %d YourDisc: %d\n" +
+		"| TxInterval: %d RxInterval: %d EchoRxInterval: %d\n" +
+		"|--------------------------------------------------"
 
 	// 认证auth
-	auth =  &layers.BFDAuthHeader{
+	auth = &layers.BFDAuthHeader{
 		AuthType:       layers.BFDAuthTypeKeyedMD5,
 		KeyID:          2,
 		SequenceNumber: 5,
@@ -51,7 +51,7 @@ var (
 	}
 )
 
-////////////////////////////////////// Decode解码 ///////////////////////////////////////////////////////////
+// //////////////////////////////////// Decode解码 ///////////////////////////////////////////////////////////
 func DecodePacket(packetBytes []byte) (*layers.BFD, error) {
 	var pbfd *layers.BFD
 	//var err error
@@ -140,24 +140,23 @@ func validate(pbfd *layers.BFD) error {
 	return nil
 }
 
-
-/////////////////////////////////////// Encode编码 ////////////////////////////////////////////////////
+// ///////////////////////////////////// Encode编码 ////////////////////////////////////////////////////
 func EncodePacket(Version layers.BFDVersion,
-				Diagnostic                layers.BFDDiagnostic,
-				State                     layers.BFDState,
-				Poll                      bool,
-				Final                     bool,
-				ControlPlaneIndependent   bool,
-				AuthPresent               bool,
-				Demand                    bool,
-				Multipoint                bool,
-				DetectMultiplier          layers.BFDDetectMultiplier,
-				MyDiscriminator           layers.BFDDiscriminator,
-				YourDiscriminator         layers.BFDDiscriminator,
-				DesiredMinTxInterval      layers.BFDTimeInterval,
-				RequiredMinRxInterval     layers.BFDTimeInterval,
-				RequiredMinEchoRxInterval layers.BFDTimeInterval,
-				AuthHeader                *layers.BFDAuthHeader) []byte  {
+	Diagnostic layers.BFDDiagnostic,
+	State layers.BFDState,
+	Poll bool,
+	Final bool,
+	ControlPlaneIndependent bool,
+	AuthPresent bool,
+	Demand bool,
+	Multipoint bool,
+	DetectMultiplier layers.BFDDetectMultiplier,
+	MyDiscriminator layers.BFDDiscriminator,
+	YourDiscriminator layers.BFDDiscriminator,
+	DesiredMinTxInterval layers.BFDTimeInterval,
+	RequiredMinRxInterval layers.BFDTimeInterval,
+	RequiredMinEchoRxInterval layers.BFDTimeInterval,
+	AuthHeader *layers.BFDAuthHeader) []byte {
 
 	pExpectedBFD := &layers.BFD{
 		BaseLayer: layers.BaseLayer{
@@ -196,4 +195,41 @@ func EncodePacket(Version layers.BFDVersion,
 
 	//fmt.Println(buf.Bytes())
 	return buf.Bytes()
+}
+
+/////////////////////////////////////// Echo 报文编解码 ////////////////////////////////////////////////////
+
+// Echo 报文格式 (RFC 5880 Echo 模式, 载荷由实现自定义):
+//
+//	0                   1                   2                   3
+//	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	|                    My Discriminator                          |
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	|                    Timestamp (高 32 位, 纳秒)                 |
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	|                    Timestamp (低 32 位, 纳秒)                 |
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+// MyDiscriminator: 发送方的本地标识符, 用于匹配回送报文与对应的会话
+// Timestamp:       发送时刻(纳秒), 用于计算往返时延 RTT
+
+const EchoPacketLen = 12
+
+// EncodeEchoPacket 编码 Echo 报文
+func EncodeEchoPacket(discriminator uint32, timestampNs int64) []byte {
+	buf := make([]byte, EchoPacketLen)
+	binary.BigEndian.PutUint32(buf[0:4], discriminator)
+	binary.BigEndian.PutUint64(buf[4:12], uint64(timestampNs))
+	return buf
+}
+
+// DecodeEchoPacket 解码 Echo 报文
+func DecodeEchoPacket(data []byte) (discriminator uint32, timestampNs int64, err error) {
+	if len(data) < EchoPacketLen {
+		return 0, 0, errors.New("echo packet too short")
+	}
+	discriminator = binary.BigEndian.Uint32(data[0:4])
+	timestampNs = int64(binary.BigEndian.Uint64(data[4:12]))
+	return discriminator, timestampNs, nil
 }

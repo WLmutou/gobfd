@@ -2,9 +2,11 @@ package gobfd
 
 import (
 	"fmt"
-	"github.com/google/gopacket/layers"
 	"math/rand"
 	"net"
+	"sync/atomic"
+
+	"github.com/google/gopacket/layers"
 
 	"time"
 )
@@ -29,8 +31,8 @@ const (
 type Session struct {
 	conn *net.UDPConn
 
-	clientDone chan bool  // true: down
-	clientQuit chan bool  // true: 退出
+	clientDone chan bool // true: down
+	clientQuit chan bool // true: 退出
 
 	// 回调状态
 	callFunc CallbackFunc
@@ -72,6 +74,15 @@ type Session struct {
 	remoteDetectMult     uint32 //layers.BFDDetectMultiplier
 	remoteMinTxInterval  uint32 //layers.BFDTimeInterval
 	txPackets            *layers.BFD
+
+	// Echo 模式相关字段 (RFC 5880 Section 6.4)
+	EchoEnabled               bool   // 是否启用 Echo 模式
+	echoInterval              uint32 // Echo 报文发送间隔(微秒)
+	echoDetectTime            uint32 // Echo 检测超时时间(微秒)
+	requiredMinEchoRxInterval uint32 // 本端支持的最小 Echo 接收间隔(微秒), 通告给对端
+	lastEchoRxTime            int64  // 最近一次收到 Echo 回送的时间(纳秒)
+	echoConn                  *net.UDPConn
+	echoQuit                  chan bool // 退出 Echo 循环
 }
 
 func NewSession(local, remote string, family int, passive bool,
@@ -86,6 +97,7 @@ func NewSession(local, remote string, family int, passive bool,
 	tmpSess := &Session{
 		clientDone: make(chan bool),
 		clientQuit: make(chan bool),
+		echoQuit:   make(chan bool, 1), // buffered, 避免 DelSession 阻塞
 		callFunc:   f,
 		Local:      local,
 		Remote:     remote,
@@ -105,7 +117,7 @@ func NewSession(local, remote string, family int, passive bool,
 		DemandMode:          DemandMode,
 		RemoteDemandMode:    false,
 		DetectMult:          uint8(detectMult), //layers.BFDDetectMultiplier(detectMult),
-		AuthType:            true,  //  是否需要认证
+		AuthType:            true,              //  是否需要认证
 		RcvAuthSeq:          0,
 		XmitAuthSeq:         rand.Int63n(4294967295), // 32-bit
 		AuthSeqKnown:        false,
@@ -122,9 +134,32 @@ func NewSession(local, remote string, family int, passive bool,
 	return tmpSess
 }
 
+// NewEchoSession 创建一个启用 Echo 模式的 BFD 会话
+// echoInterval: Echo 报文发送间隔(毫秒), >0 时启用 Echo
+func NewEchoSession(local, remote string, family int, passive bool,
+	rxInterval, txInterval, detectMult, echoInterval int, f CallbackFunc) *Session {
+
+	tmpSess := NewSession(local, remote, family, passive, rxInterval, txInterval, detectMult, f)
+
+	if echoInterval <= 0 {
+		return tmpSess
+	}
+
+	tmpSess.EchoEnabled = true
+	tmpSess.echoInterval = uint32(echoInterval * 1000)                 // 转为微秒
+	tmpSess.echoDetectTime = uint32(detectMult) * tmpSess.echoInterval // detectMult * echoInterval
+	// 通告对端本端支持的最小 Echo 接收间隔
+	tmpSess.requiredMinEchoRxInterval = tmpSess.echoInterval
+	// 初始化为当前时间, 避免一启动就误判超时
+	tmpSess.lastEchoRxTime = time.Now().UnixNano()
+
+	go tmpSess.echoLoop()
+
+	return tmpSess
+}
+
 func (s *Session) sessionLoop() {
 	slogger.Infof("setting up UDP client for %s:%d", s.Remote, CONTROL_PORT)
-
 
 	conn, err := NewClient(s.Local, s.Remote, s.Family)
 	if err != nil {
@@ -149,7 +184,7 @@ func (s *Session) sessionLoop() {
 			conn, err := NewClient(s.Local, s.Remote, s.Family)
 			if err != nil {
 				s.closeConn()
-				time.Sleep(time.Duration(int(interval)) * time.Microsecond )
+				time.Sleep(time.Duration(int(interval)) * time.Microsecond)
 				continue
 			}
 			s.conn = conn
@@ -157,7 +192,7 @@ func (s *Session) sessionLoop() {
 			// 启动检测
 			go s.DetectFailure()
 
-		case <- s.clientQuit:
+		case <-s.clientQuit:
 			// 执行退出
 			s.closeConn()
 			return
@@ -353,7 +388,7 @@ func (s *Session) TxPacket(final bool) {
 		s.RemoteDiscr,
 		layers.BFDTimeInterval(s.desiredMinTxInterval),
 		layers.BFDTimeInterval(s.requiredMinRxInterval),
-		RequiredMinEchoRxInterval,
+		layers.BFDTimeInterval(s.requiredMinEchoRxInterval),
 		tmpAuth)
 
 	_, err := s.conn.Write(txByte)
@@ -491,7 +526,7 @@ func (s *Session) DetectFailure() {
 					slogger.Infof("Time since last packet: %d ms; Detect Time: %d ms ", (time.Now().UnixNano()/1e6 - s.LastRxPacketTime), int64(s.asyncDetectTime)/1000)
 
 					//fmt.Printf("Detected BFD remote %s going DOWN \n", s.Remote)
-					fmt.Printf("Time since last packet: %d ms; Detect Time: %d ms \n", (time.Now().UnixNano()/1e6 - s.LastRxPacketTime), int64(s.asyncDetectTime) / 1000)
+					fmt.Printf("Time since last packet: %d ms; Detect Time: %d ms \n", (time.Now().UnixNano()/1e6 - s.LastRxPacketTime), int64(s.asyncDetectTime)/1000)
 
 				}
 			}
@@ -499,5 +534,95 @@ func (s *Session) DetectFailure() {
 			time.Sleep(time.Millisecond / 10) // 这里等待时间, 如果太短,cpu占用就大,等待时长,最后的结果不是很准
 
 		}
+	}
+}
+
+//////////////////////////////// Echo 模式 (RFC 5880 Section 6.4) ////////////////////////////////
+//
+// Echo 模式下, 本端主动向对端 ECHO_PORT 发送 Echo 报文, 对端在网络层直接将报文
+// 原样环回。本端通过检测 Echo 回送报文的到达情况来判断转发路径的健康度, 并可计算
+// 往返时延 RTT。若在 echoDetectTime 内未收到回送, 则认为路径故障, 会话状态转为 Down。
+
+// echoLoop Echo 模式主循环: 周期性发送 Echo 报文并检测超时
+func (s *Session) echoLoop() {
+	slogger.Infof("setting up BFD Echo client for %s:%d", s.Remote, ECHO_PORT)
+
+	conn, err := NewEchoClient(s.Local, s.Remote, s.Family)
+	if err != nil {
+		logger.Error("echo client setup error: " + err.Error())
+		return
+	}
+	defer conn.Close()
+	s.echoConn = conn
+
+	// 启动回送报文读取 goroutine
+	go s.echoReadLoop(conn)
+
+	ticker := time.NewTicker(time.Duration(s.echoInterval) * time.Microsecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.echoQuit:
+			slogger.Infof("BFD Echo loop for %s stopped", s.Remote)
+			return
+		case <-ticker.C:
+			// 仅在会话 Up 时发送 Echo, 避免在协商完成前发包
+			if s.State != layers.BFDStateUp {
+				continue
+			}
+
+			now := time.Now().UnixNano()
+			pkt := EncodeEchoPacket(uint32(s.LocalDiscr), now)
+			if _, err := conn.Write(pkt); err != nil {
+				logger.Debug("echo send error: " + err.Error())
+				continue
+			}
+
+			// 检测 Echo 超时
+			last := atomic.LoadInt64(&s.lastEchoRxTime)
+			elapsedUs := (now - last) / 1000 // 微秒
+			if elapsedUs > int64(s.echoDetectTime) {
+				slogger.Errorf("BFD Echo timeout for %s, declaring DOWN (elapsed=%d us, detect=%d us)",
+					s.Remote, elapsedUs, s.echoDetectTime)
+
+				// 状态变化, 执行回调函数
+				go s.callFunc(s.Remote, int(s.State), int(layers.BFDStateDown))
+
+				s.State = layers.BFDStateDown
+				s.LocalDiag = layers.BFDDiagnosticTimeExpired
+				s.setDesiredMinTxInterval(DesiredMinTXInterval)
+			}
+		}
+	}
+}
+
+// echoReadLoop 读取 Echo 回送报文, 更新最近接收时间并计算 RTT
+func (s *Session) echoReadLoop(conn *net.UDPConn) {
+	buf := make([]byte, 64)
+	for {
+		select {
+		case <-s.echoQuit:
+			return
+		default:
+		}
+		// 设置读超时, 以便周期性检查 echoQuit
+		conn.SetReadDeadline(time.Now().Add(time.Second))
+		n, err := conn.Read(buf)
+		if err != nil {
+			continue
+		}
+		discr, sendTs, err := DecodeEchoPacket(buf[:n])
+		if err != nil {
+			continue
+		}
+		// 仅匹配本会话标识符的回送报文
+		if discr != uint32(s.LocalDiscr) {
+			continue
+		}
+		now := time.Now().UnixNano()
+		atomic.StoreInt64(&s.lastEchoRxTime, now)
+		rttMs := (now - sendTs) / 1e6
+		slogger.Debugf("Echo reply from %s, RTT=%d ms", s.Remote, rttMs)
 	}
 }

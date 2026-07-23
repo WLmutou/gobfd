@@ -1,7 +1,7 @@
 package gobfd
 
 import (
-	internalbfd "gobfd/internal"
+	internalbfd "github.com/WLmutou/gobfd/internal"
 )
 
 // BFD 会话状态常量 (RFC 5880)
@@ -11,6 +11,12 @@ const (
 	StateDown      = 1 // Down
 	StateInit      = 2 // 初始化
 	StateUp        = 3 // Up
+)
+
+// BFD 使用的 UDP 端口 (RFC 5880)
+const (
+	ControlPort = internalbfd.CONTROL_PORT // BFD Control 报文端口 (3784)
+	EchoPort    = internalbfd.ECHO_PORT    // BFD Echo 报文端口 (3785)
 )
 
 // CallbackFunc BFD 会话状态变化时触发的回调函数类型

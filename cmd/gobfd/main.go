@@ -6,6 +6,7 @@
 //
 //	go run ./cmd/gobfd -local 0.0.0.0 -remote 192.168.1.244 -rx 400 -tx 400 -mult 1
 //	go run ./cmd/gobfd -remote 192.168.1.244 -remote 192.168.1.185
+//	go run ./cmd/gobfd -remote 192.168.1.244 -echo 100   # 启用 Echo 模式
 //
 // 参数:
 //
@@ -16,6 +17,7 @@
 //	-rx       接收间隔(毫秒), 默认 400
 //	-tx       发送间隔(毫秒), 默认 400
 //	-mult     报文最大失效个数, 默认 1
+//	-echo     Echo 报文发送间隔(毫秒), >0 启用 RFC 5880 Echo 模式, 默认 0(关闭)
 //	-duration 运行时长(秒), <=0 表示一直运行, 默认 0
 package main
 
@@ -27,7 +29,7 @@ import (
 	"syscall"
 	"time"
 
-	"gobfd"
+	"github.com/WLmutou/gobfd"
 )
 
 // callBackBFDState BFD 会话状态变化回调
@@ -73,6 +75,7 @@ func main() {
 	rx := flag.Int("rx", 400, "接收间隔(毫秒)")
 	tx := flag.Int("tx", 400, "发送间隔(毫秒)")
 	mult := flag.Int("mult", 1, "报文最大失效个数")
+	echo := flag.Int("echo", 0, "Echo 报文发送间隔(毫秒), >0 启用 RFC 5880 Echo 模式")
 	duration := flag.Int("duration", 0, "运行时长(秒), <=0 表示一直运行")
 
 	var remotes stringSliceFlag
@@ -101,12 +104,19 @@ func main() {
 
 	// 添加监测会话
 	for _, remote := range remotes {
-		control.AddSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
-		fmt.Printf("[BFD] added session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
-			*local, remote, *rx, *tx, *mult, *passive)
+		if *echo > 0 {
+			control.AddEchoSession(remote, *passive, *rx, *tx, *mult, *echo, callBackBFDState)
+			fmt.Printf("[BFD] added echo session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d echo=%dms passive=%v)\n",
+				*local, remote, *rx, *tx, *mult, *echo, *passive)
+		} else {
+			control.AddSession(remote, *passive, *rx, *tx, *mult, callBackBFDState)
+			fmt.Printf("[BFD] added session: local=%s -> remote=%s (rx=%dms tx=%dms mult=%d passive=%v)\n",
+				*local, remote, *rx, *tx, *mult, *passive)
+		}
 	}
 
-	fmt.Printf("[BFD] local server listening on %s:%d, waiting for state changes...\n", *local, 3784)
+	fmt.Printf("[BFD] local server listening on %s:%d (control) / %d (echo), waiting for state changes...\n",
+		*local, gobfd.ControlPort, gobfd.EchoPort)
 
 	// 等待退出信号或定时结束
 	sigCh := make(chan os.Signal, 1)
